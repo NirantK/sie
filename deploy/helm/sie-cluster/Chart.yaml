@@ -1,0 +1,26 @@
+apiVersion: v2
+name: sie-cluster
+description: SIE (Search Inference Engine) Kubernetes deployment with router, GPU workers, and observability
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - inference
+  - embedding
+  - reranking
+  - gpu
+  - ml
+
+home: https://github.com/superlinked/sie
+sources:
+  - https://github.com/superlinked/sie
+
+maintainers:
+  - name: Superlinked
+    email: support@superlinked.com
+
+annotations:
+  # Require KEDA for autoscaling
+  artifacthub.io/operator: "false"
+  artifacthub.io/prerelease: "true"

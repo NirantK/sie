@@ -1,0 +1,89 @@
+# Default bundle: Standard models using transformers>=4.57
+# These models don't require trust_remote_code with incompatible deps
+[bundle]
+name = "default"
+priority = 10  # Lower = preferred. Router selects lowest priority compatible bundle.
+default = true
+models = [
+    # Small embedding models
+    "sentence-transformers/all-MiniLM-L6-v2",
+    "intfloat/e5-small-v2",
+    "intfloat/e5-base-v2",
+    "intfloat/e5-large-v2",
+    # BGE models
+    "BAAI/bge-m3",
+    "BAAI/bge-m3:bge_m3_flag",
+    # Multilingual models
+    "Alibaba-NLP/gte-multilingual-base",
+    "intfloat/multilingual-e5-large",
+    "intfloat/multilingual-e5-large-instruct",
+    # Nomic MoE model
+    "nomic-ai/nomic-embed-text-v2-moe",
+    # Qwen3 embedding models (small only - 4B+ moved to sglang bundle)
+    "Qwen/Qwen3-Embedding-0.6B",
+    # NOTE: Qwen3-Embedding-4B, e5-mistral-7b-instruct, SFR-Embedding-*, Linq-Embed-Mistral,
+    # nvidia/llama-embed-nemotron-8b all use SGLangEmbeddingAdapter and belong in sglang bundle
+    # NVIDIA models (NV-Embed-v2 uses sentence_transformers, not sglang)
+    "nvidia/NV-Embed-v2",
+    # Stella models
+    "NovaSearch/stella_en_400M_v5",
+    "NovaSearch/stella_en_1.5B_v5",
+    # GritLM
+    "GritLM/GritLM-7B",
+    # GTE Qwen2 instruct
+    "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+    # Small decoder-only
+    "google/embeddinggemma-300m",
+    # Sparse models (SPLADE family) - ungated only
+    # Note: naver/splade-v3 and naver/splade-cocondenser-selfdistil are gated (require HF login)
+    "opensearch-project/opensearch-neural-sparse-encoding-v2-distill",
+    "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill",
+    "rasyosef/splade-mini",
+    "prithivida/Splade_PP_en_v2",
+    # Additional sparse models
+    "ibm-granite/granite-embedding-30m-sparse",  # 30M params, RoBERTa vocab (50265)
+    "opensearch-project/opensearch-neural-sparse-encoding-v1",
+    "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill",  # inference-free
+    "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-mini",  # inference-free, small
+    "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte",  # GTE sparse, cross-platform (flash on CUDA, native on CPU/MPS)
+    # ColBERT / late interaction models (cross-platform, flash on CUDA, native on CPU/MPS)
+    "answerdotai/answerai-colbert-small-v1",  # 33M params, 96-dim token embeddings
+    "colbert-ir/colbertv2.0",  # BERT-base, 128-dim token embeddings (original ColBERT)
+    "jinaai/jina-colbert-v2",  # 0.6B params, 128-dim, multilingual (94 languages), rotary embeddings
+    "mixedbread-ai/mxbai-colbert-large-v1",  # 137M params
+    "mixedbread-ai/mxbai-edge-colbert-v0-32m",  # 32M params, ModernBERT
+    "lightonai/GTE-ModernColBERT-v1",  # ModernBERT-based ColBERT
+    "lightonai/Reason-ModernColBERT",  # Reasoning-focused ColBERT
+    "nvidia/llama-nemoretriever-colembed-3b-v1",  # CUDA-only (requires flash-attn, use: uv sync --extra flash-attn)
+    # Object detection models
+    "IDEA-Research/grounding-dino-base",  # Grounding DINO base
+    "IDEA-Research/grounding-dino-tiny",  # Grounding DINO tiny
+    "google/owlv2-base-patch16-ensemble",  # OWLv2 detection
+    # Image-text embedding (CLIP family)
+    "openai/clip-vit-base-patch32",  # Original CLIP, 400M params
+    "openai/clip-vit-large-patch14",  # Large CLIP, 428M params
+    "laion/CLIP-ViT-B-32-laion2B-s34B-b79K",  # LAION CLIP ViT-B/32
+    "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",  # LAION CLIP ViT-H/14, 632M params
+    # SigLIP models (improved CLIP from Google)
+    "google/siglip-so400m-patch14-224",  # SigLIP 400M, 224px
+    "google/siglip-so400m-patch14-384",  # SigLIP 400M, 384px (higher res)
+    # Visual document retrieval (ColPali/ColQwen2)
+    "vidore/colpali-v1.3-hf",  # ColPali 3B, PaliGemma-based
+    "vidore/colqwen2.5-v0.2",  # ColQwen2 7B, Qwen2-VL based
+    # Cross-encoder rerankers
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",  # Small reranker, 23M params
+    "cross-encoder/ms-marco-MiniLM-L-12-v2",  # Medium reranker, 33M params
+    "BAAI/bge-reranker-base",  # BGE reranker, 109M params
+    "BAAI/bge-reranker-large",  # BGE reranker, 335M params
+    "BAAI/bge-reranker-v2-m3",  # BGE reranker v2 multilingual
+    "Alibaba-NLP/gte-reranker-modernbert-base",  # ModernBERT-based reranker
+    "mixedbread-ai/mxbai-rerank-base-v2",  # Mixedbread reranker base
+    "mixedbread-ai/mxbai-rerank-large-v2",  # Mixedbread reranker large
+    "jinaai/jina-reranker-v2-base-multilingual",  # Jina multilingual reranker
+    # Zero-shot NLI classification (DeBERTa)
+    "MoritzLaurer/deberta-v3-base-zeroshot-v2.0",
+    "MoritzLaurer/deberta-v3-large-zeroshot-v2.0",
+    # Gated models (require HF_TOKEN)
+    "naver/splade-v3",
+    "naver/splade-cocondenser-selfdistil",
+]

@@ -1,0 +1,134 @@
+# Grafana Alloy values for SIE log collection
+# Install: helm install alloy grafana/alloy -f alloy-values.yaml
+#
+# Alloy replaces Promtail (deprecated 2025) for log collection
+
+alloy:
+  # Configuration for collecting SIE logs
+  configMap:
+    content: |
+      // Kubernetes log discovery
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Relabel to filter SIE pods and extract metadata
+      discovery.relabel "sie_pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Only collect logs from SIE containers
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_part_of"]
+          regex         = "sie"
+          action        = "keep"
+        }
+
+        // Extract namespace
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        // Extract pod name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        // Extract container name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        // Extract component (router/worker)
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component"]
+          target_label  = "component"
+        }
+
+        // Extract GPU type label
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_sie_superlinked_com_gpu_type"]
+          target_label  = "gpu_type"
+        }
+
+        // Set log file path
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          target_label  = "__path__"
+          separator     = "/"
+          replacement   = "/var/log/pods/*$1/$2/*.log"
+        }
+      }
+
+      // Collect logs from files
+      loki.source.file "sie_logs" {
+        targets    = discovery.relabel.sie_pods.output
+        forward_to = [loki.process.sie_json.receiver]
+      }
+
+      // Parse SIE JSON logs
+      loki.process "sie_json" {
+        forward_to = [loki.write.default.receiver]
+
+        // Parse JSON logs from SIE containers
+        stage.json {
+          expressions = {
+            level      = "level",
+            logger     = "logger",
+            message    = "message",
+            model      = "model",
+            request_id = "request_id",
+            trace_id   = "trace_id",
+            latency_ms = "latency_ms",
+          }
+        }
+
+        // Extract level as label for filtering
+        stage.labels {
+          values = {
+            level  = "",
+            logger = "",
+          }
+        }
+
+        // Add model as label if present
+        stage.label_drop {
+          values = ["model"]
+        }
+        stage.labels {
+          values = {
+            model = "",
+          }
+        }
+      }
+
+      // Write to Loki
+      loki.write "default" {
+        endpoint {
+          url = "http://loki:3100/loki/api/v1/push"
+        }
+      }
+
+# DaemonSet for collecting logs from all nodes
+controller:
+  type: daemonset
+
+# Mount host log directories
+mounts:
+  varlog: true
+  dockercontainers: true
+
+# Resources
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Tolerations to run on all nodes including GPU nodes
+tolerations:
+  - operator: Exists

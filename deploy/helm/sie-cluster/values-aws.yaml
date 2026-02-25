@@ -1,0 +1,89 @@
+# AWS EKS specific values
+fullnameOverride: sie
+
+# AWS requires FQDN for cross-namespace DNS resolution
+autoscaling:
+  prometheusAddress: http://prometheus-operated.monitoring.svc.cluster.local:9090
+  # Match GCP (600s/300s) - must survive gaps between matrix eval task transitions
+  cooldownPeriod: 600
+  scaleDownStabilization: 300
+
+# Enable Prometheus scraping (required for KEDA autoscaling)
+serviceMonitor:
+  enabled: true
+  labels:
+    app.kubernetes.io/part-of: sie
+
+# Enable Grafana dashboards
+dashboards:
+  enabled: true
+  labels:
+    grafana_dashboard: "1"
+  folder: SIE
+
+# AWS machine profiles (extends base machineProfiles)
+machineProfiles:
+  # AWS g5.xlarge (NVIDIA A10G)
+  g5:
+    gpuType: nvidia-a10g
+    machineType: g5.xlarge
+    spot: false
+
+# Ingress via nginx-ingress (matches GCP)
+ingress:
+  enabled: true
+  className: nginx
+
+router:
+  # HA configuration to match GCP
+  replicaCount: 2
+  # Force repull to get latest image
+  image:
+    pullPolicy: Always
+  # Disable embeddedConfigs - router image has configs baked in
+  embeddedConfigs:
+    enabled: false
+  # Resources to match GCP baseline
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+workers:
+  pools:
+    # Disable GCP-specific pools
+    l4:
+      enabled: false
+    a100-40gb:
+      enabled: false
+    a100-80gb:
+      enabled: false
+    cpu:
+      enabled: false
+
+    # AWS g5.xlarge pool (NVIDIA A10G)
+    g5:
+      enabled: true
+      minReplicas: 0
+      maxReplicas: 10
+      machineProfile: g5
+      gpuType: a10g
+      # No GCP-specific node selector
+      nodeSelector: {}
+      gpu:
+        count: 1
+        product: NVIDIA-A10G
+      resources:
+        requests:
+          cpu: "2"
+          memory: "8Gi"
+        limits:
+          cpu: "4"
+          memory: "16Gi"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

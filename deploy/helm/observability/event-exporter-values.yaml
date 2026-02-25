@@ -1,0 +1,41 @@
+# kubernetes-event-exporter values for SIE
+# Install: helm install event-exporter bitnami/kubernetes-event-exporter -f event-exporter-values.yaml
+#
+# Exports K8s events to Loki so provisioning failures are searchable
+
+config:
+  logLevel: info
+  logFormat: json
+
+  # Route all events to Loki
+  route:
+    routes:
+      - match:
+          - receiver: "loki"
+
+  receivers:
+    - name: "loki"
+      webhook:
+        endpoint: "http://loki:3100/loki/api/v1/push"
+        headers:
+          Content-Type: application/json
+        layout:
+          streams:
+            - stream:
+                app: "kubernetes-events"
+                namespace: "{{ .InvolvedObject.Namespace }}"
+                kind: "{{ .InvolvedObject.Kind }}"
+                name: "{{ .InvolvedObject.Name }}"
+                reason: "{{ .Reason }}"
+                type: "{{ .Type }}"
+              values:
+                - - "{{ .LastTimestamp.UnixNano }}"
+                  - "{{ .Message }}"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi

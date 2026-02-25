@@ -1,0 +1,11 @@
+[project]
+name = "sie-adapter-grounding-dino"
+version = "0.1.0"
+description = "GroundingDINO adapter for SIE - open-vocabulary object detection"
+requires-python = ">=3.11"
+dependencies = [
+    "transformers>=4.40",
+    "torch>=2.0",
+    "pillow",
+    "requests",
+]

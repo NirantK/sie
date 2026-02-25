@@ -1,0 +1,26 @@
+# Florence-2 bundle: Microsoft Florence-2 and Donut vision-language models
+# Florence-2 requires timm (PyTorch Image Models) for the DaViT vision encoder
+# Donut models use VisionEncoderDecoderModel for document understanding
+[bundle]
+name = "florence2"
+priority = 50  # Lower = preferred. Router selects lowest priority compatible bundle.
+default = false
+models = [
+    # Florence-2 models (OCR, object detection, captioning)
+    "microsoft/Florence-2-base",
+    "microsoft/Florence-2-large",
+    "microsoft/Florence-2-base-ft",
+    # Florence-2 DocVQA fine-tuned models
+    "mynkchaudhry/Florence-2-FT-DocVQA",
+    # Donut models (document parsing, visual QA)
+    "naver-clova-ix/donut-base-finetuned-cord-v2",  # Receipt parsing
+    "naver-clova-ix/donut-base-finetuned-docvqa",   # Document QA
+    "naver-clova-ix/donut-base-finetuned-rvlcdip",  # Document classification
+]
+
+[bundle.deps]
+# Florence-2 requires timm for DaViT vision encoder
+timm = ">=0.9.0"
+# Flash attention for optimized inference (used by *-flash model variants)
+# Linux-only: macOS/Windows will fall back to slower attention implementations
+flash-attn = { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.7.4+cu128torch2.9-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux'" }

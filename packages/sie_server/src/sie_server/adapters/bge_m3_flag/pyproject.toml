@@ -1,0 +1,7 @@
+[project]
+name = "sie-adapter-bge-m3-flag"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "FlagEmbedding>=1.3",
+]

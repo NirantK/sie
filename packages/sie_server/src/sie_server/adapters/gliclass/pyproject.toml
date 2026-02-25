@@ -1,0 +1,8 @@
+[project]
+name = "sie-adapter-gliclass"
+version = "0.1.0"
+description = "GLiClass adapter for SIE - zero-shot text classification"
+requires-python = ">=3.12"
+dependencies = [
+    "gliclass>=0.1,<1",
+]

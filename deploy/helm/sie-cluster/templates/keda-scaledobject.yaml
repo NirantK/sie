@@ -1,0 +1,133 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $root := . -}}
+{{- range $poolName, $pool := .Values.workers.pools }}
+{{- if $pool.enabled }}
+{{- $bundle := default $root.Values.workers.common.bundle $pool.bundle }}
+{{- $machineProfile := default $pool.gpuType $pool.machineProfile }}
+---
+# KEDA ScaledObject for {{ $poolName }} worker pool (machineProfile: {{ $machineProfile }}, bundle: {{ $bundle }})
+# GPU-optimized autoscaling with extended cooldown for cold starts
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sie-cluster.fullname" $root }}-worker-{{ $poolName }}-scaler
+  namespace: {{ include "sie-cluster.namespace" $root }}
+  labels:
+    {{- include "sie-cluster.worker.labels" $root | nindent 4 }}
+    sie.superlinked.com/pool: {{ $poolName | quote }}
+    sie.superlinked.com/bundle: {{ $bundle | quote }}
+spec:
+  scaleTargetRef:
+    kind: StatefulSet
+    name: {{ include "sie-cluster.fullname" $root }}-worker-{{ $poolName }}
+
+  # Replica bounds
+  minReplicaCount: {{ $pool.minReplicas }}
+  maxReplicaCount: {{ $pool.maxReplicas }}
+
+  # Polling and cooldown
+  pollingInterval: {{ $root.Values.autoscaling.pollingInterval }}
+  # Extended cooldown for GPU cold starts (model loading takes 60-120s)
+  cooldownPeriod: {{ $root.Values.autoscaling.cooldownPeriod }}
+
+  # Fallback if Prometheus is unavailable
+  fallback:
+    failureThreshold: 3
+    replicas: {{ $root.Values.autoscaling.fallbackReplicas }}
+
+  # HPA behavior for fine-grained control
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # Scale UP: Respond quickly to load
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 4
+              periodSeconds: 15
+          selectPolicy: Max
+
+        # Scale DOWN: Be conservative to avoid thrashing
+        scaleDown:
+          stabilizationWindowSeconds: {{ $root.Values.autoscaling.scaleDownStabilization }}
+          policies:
+            # Percent policy for gradual scale-down of larger deployments
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+            # Pods policy ensures we can always scale down at least 1 pod
+            # (needed for scale-to-zero: 25% of 1 = 0.25 = 0 pods removed)
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+          selectPolicy: Max
+
+  triggers:
+    # Scale-from-zero: Router pending demand for this machine profile
+    # Router sets pending_demand=1 when requests arrive but no workers available
+    # Sum across all pools with same machine_profile/bundle
+    # activationThreshold=0 means any demand > 0 triggers scaling from zero
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $root.Values.autoscaling.prometheusAddress }}
+        metricName: sie_router_pending_demand_{{ $poolName }}
+        query: sum(sie_router_pending_demand{machine_profile="{{ $machineProfile }}", bundle="{{ $bundle }}"}) or vector(0)
+        threshold: "1"
+        activationThreshold: "0"
+
+    # Scale-up: Router's view of worker queue depth for this WorkerGroup
+    # Sum queue depth across workers in this machine_profile/bundle combination
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $root.Values.autoscaling.prometheusAddress }}
+        metricName: sie_router_queue_depth_{{ $poolName }}
+        query: sum(sie_router_worker_queue_depth{machine_profile="{{ $machineProfile }}", bundle="{{ $bundle }}"}) or vector(0)
+        threshold: {{ $root.Values.autoscaling.queueDepthThreshold | quote }}
+        activationThreshold: {{ $root.Values.autoscaling.queueDepthActivation | quote }}
+
+    # Stay-alive: Active lease GPU count prevents scale-down during model loading
+    # gaps (between pending_demand decay and queue_depth reporting).
+    # KEDA takes MAX across triggers, so as long as a lease is active, replicas hold.
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $root.Values.autoscaling.prometheusAddress }}
+        metricName: sie_router_active_lease_gpus_{{ $poolName }}
+        query: sum(sie_router_active_lease_gpus{machine_profile="{{ $machineProfile }}", bundle="{{ $bundle }}"}) or vector(0)
+        threshold: "1"
+        activationThreshold: "0"
+{{- end }}
+{{- end }}
+
+---
+# KEDA ScaledObject for Router (lightweight, always-on)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sie-cluster.fullname" . }}-router-scaler
+  namespace: {{ include "sie-cluster.namespace" . }}
+  labels:
+    {{- include "sie-cluster.router.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: {{ include "sie-cluster.router.serviceName" . }}
+
+  # Router always maintains at least 2 replicas for HA
+  minReplicaCount: 2
+  maxReplicaCount: 10
+
+  pollingInterval: 30
+  cooldownPeriod: 300
+
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.autoscaling.prometheusAddress }}
+        metricName: sie_router_request_rate
+        query: sum(rate(sie_router_requests_total[1m])) or vector(0)
+        threshold: "100"
+{{- end }}

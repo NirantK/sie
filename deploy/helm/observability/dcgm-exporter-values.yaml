@@ -1,0 +1,33 @@
+# NVIDIA DCGM Exporter for GPU metrics
+# Install: helm install dcgm-exporter gpu-helm-charts/dcgm-exporter -f dcgm-exporter-values.yaml
+# Repo: helm repo add gpu-helm-charts https://nvidia.github.io/dcgm-exporter/helm-charts
+#
+# Exposes detailed GPU metrics: utilization, memory, temperature, power, ECC errors
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  additionalLabels:
+    app.kubernetes.io/part-of: sie
+
+# Run on all GPU nodes
+nodeSelector:
+  cloud.google.com/gke-accelerator-count: "1"
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Metrics to collect (subset for efficiency)
+arguments:
+  - "-f"
+  - "/etc/dcgm-exporter/dcp-metrics-included.csv"

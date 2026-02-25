@@ -1,0 +1,20 @@
+# SGLang bundle: Large LLM embedding models (4B+)
+# Uses SGLang backend for memory-efficient inference
+# See DESIGN.md Section 6.2 for rationale
+[bundle]
+name = "sglang"
+priority = 20  # Lower = preferred. Router selects lowest priority compatible bundle.
+models = [
+    # Qwen3 embedding models (4B+)
+    "Qwen/Qwen3-Embedding-4B",
+    "qwen3-embedding-8b",
+    # GTE-Qwen2 models
+    "Alibaba-NLP/gte-Qwen2-7B-instruct",
+    # Mistral-based models
+    "intfloat/e5-mistral-7b-instruct",
+    "Linq-AI-Research/Linq-Embed-Mistral",
+    "Salesforce/SFR-Embedding-Mistral",
+    "Salesforce/SFR-Embedding-2_R",
+    # NVIDIA models
+    "nvidia/llama-embed-nemotron-8b",
+]

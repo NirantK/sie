@@ -1,0 +1,105 @@
+# kube-prometheus-stack values for SIE observability
+# Install: helm install prometheus prometheus-community/kube-prometheus-stack -f prometheus-values.yaml
+
+# Prometheus configuration
+prometheus:
+  prometheusSpec:
+    # Discover all ServiceMonitors with sie label
+    serviceMonitorSelector:
+      matchLabels:
+        app.kubernetes.io/part-of: sie
+
+    # Also discover ServiceMonitors without labels (for flexibility)
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+    # Retention
+    retention: 15d
+    retentionSize: 50GB
+
+    # Resources for production
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 8Gi
+
+    # Storage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 100Gi
+
+# Grafana configuration
+grafana:
+  # Admin password (change in production!)
+  adminPassword: admin
+
+  # Enable sidecar for dashboard auto-discovery
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+
+    datasources:
+      enabled: true
+
+  # Additional data sources
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki:3100
+      access: proxy
+      isDefault: false
+
+  # Resources
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Persistence
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# Alertmanager configuration
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+# Node exporter for host metrics
+nodeExporter:
+  enabled: true
+
+# kube-state-metrics for Kubernetes object metrics
+kubeStateMetrics:
+  enabled: true
+
+# Disable components not needed for SIE
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
