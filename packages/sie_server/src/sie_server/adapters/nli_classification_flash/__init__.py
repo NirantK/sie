@@ -27,7 +27,7 @@ from sie_server.adapters.base import ModelAdapter, ModelCapabilities, ModelDims
 from sie_server.core.inference_output import ExtractOutput
 from sie_server.core.preprocessor import CharCountPreprocessor
 from sie_server.types.inputs import Item
-from sie_server.types.responses import Entity
+from sie_server.types.responses import Classification
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -274,25 +274,26 @@ class NLIClassificationFlashAdapter(ModelAdapter):
             scores = scores.cpu().tolist()
 
         # Convert to output format
-        # Classification results are converted to entities with label as the entity text
-        all_entities = []
+        all_classifications: list[list[Classification]] = []
         for i in range(n_texts):
-            entities = []
+            classifications: list[Classification] = []
             for j, label in enumerate(labels):
-                entities.append(
-                    Entity(
-                        text=label,
-                        label="classification",
+                classifications.append(
+                    Classification(
+                        label=label,
                         score=float(scores[i][j]),
                     )
                 )
 
             # Sort by score descending
-            entities.sort(key=lambda x: x["score"], reverse=True)
+            classifications.sort(key=lambda x: x["score"], reverse=True)
 
-            all_entities.append(entities)
+            all_classifications.append(classifications)
 
-        return ExtractOutput(entities=all_entities)
+        return ExtractOutput(
+            entities=[[] for _ in items],
+            classifications=all_classifications,
+        )
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""

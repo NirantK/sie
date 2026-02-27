@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 
 from sie_router.api.root import router as root_router
@@ -76,6 +77,7 @@ class AppFactory:
                 cls._model_registry(app, config),
                 cls._pool_manager(app, config) as pool_manager,
                 cls._worker_registry(app, pool_manager),
+                cls._http_client(app),
                 cls._connection_manager(app, config),
             ):
                 yield
@@ -237,6 +239,17 @@ class AppFactory:
 
         app.state.registry = WorkerRegistry(on_worker_healthy=on_worker_healthy)
         yield
+
+    @classmethod
+    @asynccontextmanager
+    async def _http_client(cls, app: FastAPI) -> AsyncGenerator[None, None]:
+        """Create shared httpx client for connection pooling to workers."""
+        client = httpx.AsyncClient()
+        app.state.http_client = client
+        try:
+            yield
+        finally:
+            await client.aclose()
 
     @classmethod
     @asynccontextmanager

@@ -38,7 +38,7 @@ class SentenceTransformerDenseAdapter(ModelAdapter):
         self,
         model_name_or_path: str | Path,
         *,
-        trust_remote_code: bool = False,
+        trust_remote_code: bool = True,
         normalize: bool = True,
         max_seq_length: int | None = None,
         compute_precision: ComputePrecision = "float16",
@@ -211,7 +211,7 @@ class SentenceTransformerSparseAdapter(ModelAdapter):
         self,
         model_name_or_path: str | Path,
         *,
-        trust_remote_code: bool = False,
+        trust_remote_code: bool = True,
         max_seq_length: int | None = None,
         compute_precision: ComputePrecision = "float16",
         **kwargs: Any,  # Accept extra args from loader (e.g., pooling)

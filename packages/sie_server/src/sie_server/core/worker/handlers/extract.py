@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from sie_server.core.batcher import HasCost
     from sie_server.core.worker.types import RequestMetadata
     from sie_server.types.inputs import Item
+    from sie_server.types.responses import Classification
 
 
 class ExtractHandler(OperationHandler[ExtractOutput]):
@@ -87,8 +88,10 @@ class ExtractHandler(OperationHandler[ExtractOutput]):
         Returns:
             Single-item ExtractOutput.
         """
+        classifications = [output.classifications[index]] if output.classifications is not None else None
         return ExtractOutput(
             entities=[output.entities[index]],
+            classifications=classifications,
             batch_size=1,
         )
 
@@ -110,9 +113,27 @@ class ExtractHandler(OperationHandler[ExtractOutput]):
             return ExtractOutput(entities=[], batch_size=0)
 
         entities = [partials[i].entities[0] for i in range(batch_size)]
-        return ExtractOutput(entities=entities, batch_size=batch_size)
+
+        # Reassemble classifications if any partial has them
+        has_classifications = any(p.classifications is not None for p in partials.values())
+        classifications: list[list[Classification]] | None = None
+        if has_classifications:
+            classifications = []
+            for i in range(batch_size):
+                p_cls = partials[i].classifications
+                classifications.append(p_cls[0] if p_cls is not None else [])
+
+        return ExtractOutput(entities=entities, classifications=classifications, batch_size=batch_size)
 
     @classmethod
     def format_output(cls, output: ExtractOutput) -> list[dict[str, Any]]:
         """Convert ExtractOutput to per-item dicts for API response."""
-        return [{"entities": list(ents)} for ents in output.entities]
+        results: list[dict[str, Any]] = []
+        for i, ents in enumerate(output.entities):
+            item: dict[str, Any] = {"entities": list(ents)}
+            if output.classifications is not None:
+                item["classifications"] = list(output.classifications[i])
+            else:
+                item["classifications"] = []
+            results.append(item)
+        return results

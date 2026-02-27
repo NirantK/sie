@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from sie_server.types.responses import Entity
+    from sie_server.types.responses import Classification, Entity
 
 
 @dataclass
@@ -129,14 +129,17 @@ class ScoreOutput:
 
 @dataclass
 class ExtractOutput:
-    """Batched output from adapter.extract() - entities/structured data.
+    """Batched output from adapter.extract() - entities/structured data/classifications.
 
     Attributes:
         entities: Extracted entities per item. Each is list[Entity].
+        classifications: Classification results per item. Each is list[Classification].
+            None when the adapter does not produce classifications.
         batch_size: Number of items processed.
     """
 
     entities: list[list[Entity]]  # len=batch
+    classifications: list[list[Classification]] | None = None  # len=batch or None
 
     # Metadata
     batch_size: int = 0
@@ -147,4 +150,8 @@ class ExtractOutput:
             self.batch_size = len(self.entities)
         elif len(self.entities) != self.batch_size:
             msg = f"entities list length {len(self.entities)} != batch_size {self.batch_size}"
+            raise ValueError(msg)
+
+        if self.classifications is not None and len(self.classifications) != self.batch_size:
+            msg = f"classifications list length {len(self.classifications)} != batch_size {self.batch_size}"
             raise ValueError(msg)

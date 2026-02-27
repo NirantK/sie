@@ -1,28 +1,3 @@
-"""Hot reload support for Router ModelRegistry configuration.
-
-Watches bundle and model configuration directories for changes and
-automatically reloads the ModelRegistry. This enables config updates
-without router restart.
-
-Unlike the server's hot_reload which manages model loading/unloading,
-the router's hot_reload simply refreshes the model→bundle mappings
-when bundle.toml or *.yaml config files change.
-
-Usage (in router lifespan):
-    watcher = ConfigWatcher(model_registry, bundles_dir, models_dir)
-    watcher.start()
-
-Cleanup:
-    watcher.stop()
-
-In Kubernetes, git-sync sidecar updates the config files and this watcher
-detects the changes and reloads the registry.
-
-Note: For Kubernetes ConfigMap mounts, a polling observer is used because
-ConfigMaps use atomic symlink swaps that inotify doesn't detect properly.
-Set SIE_ROUTER_POLLING_WATCHER=true to force polling mode.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -57,7 +32,7 @@ class WatcherConfig:
     """
 
     debounce_seconds: float = 1.0
-    bundle_patterns: tuple[str, ...] = ("*.toml",)
+    bundle_patterns: tuple[str, ...] = ("*.yaml",)
     model_patterns: tuple[str, ...] = ("*.yaml",)
     use_polling: bool = False
     polling_interval: float = 5.0
@@ -104,7 +79,7 @@ class ConfigWatcher:
 
     Attributes:
         registry: The ModelRegistry to reload on changes.
-        bundles_dir: Path to bundle TOML files.
+        bundles_dir: Path to bundle YAML files.
         models_dir: Path to model config directories.
     """
 

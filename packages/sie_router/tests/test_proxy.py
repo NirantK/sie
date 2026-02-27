@@ -80,6 +80,7 @@ def client(app: FastAPI, registry: MagicMock, pool_manager: MagicMock) -> TestCl
     """Create test client with mocked dependencies."""
     app.state.registry = registry
     app.state.pool_manager = pool_manager
+    app.state.http_client = MagicMock()
     return TestClient(app)
 
 

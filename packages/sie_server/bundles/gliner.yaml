@@ -1,0 +1,17 @@
+name: gliner
+priority: 25
+adapters:
+- sie_server.adapters.gliner
+- sie_server.adapters.glirel
+- sie_server.adapters.gliclass
+deps:
+  # gliner adapter
+  gliner: '>=0.2,<1'
+  transformers: '>=4.51.3,<5'
+  torch: '>=2.9,<2.10'
+  # glirel adapter
+  glirel: '>=1.0,<2'
+  # gliclass adapter
+  gliclass: '>=0.1,<1'
+  # shared dep
+  loguru: '>=0.7,<1'

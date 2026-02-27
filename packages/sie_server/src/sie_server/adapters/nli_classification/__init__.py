@@ -16,7 +16,7 @@ from sie_server.adapters.base import ModelAdapter, ModelCapabilities, ModelDims
 from sie_server.config.model import ComputePrecision
 from sie_server.core.inference_output import ExtractOutput
 from sie_server.core.preprocessor import CharCountPreprocessor
-from sie_server.types.responses import Entity
+from sie_server.types.responses import Classification
 
 if TYPE_CHECKING:
     from transformers import Pipeline
@@ -210,27 +210,29 @@ class NLIClassificationAdapter(ModelAdapter):
             pipeline_results = [pipeline_results]
 
         # Convert to our format
-        # Classification results are converted to entities with label as the entity text
-        all_entities = []
+        all_classifications: list[list[Classification]] = []
         for pipeline_result in pipeline_results:
             # Pipeline returns {"labels": [...], "scores": [...]}
-            entities = []
+            classifications: list[Classification] = []
             for label, score in zip(
                 pipeline_result["labels"],
                 pipeline_result["scores"],
                 strict=True,
             ):
-                entities.append(
-                    Entity(
-                        text=label,
-                        label="classification",
+                classifications.append(
+                    Classification(
+                        label=label,
                         score=float(score),
                     )
                 )
 
-            all_entities.append(entities)
+            classifications.sort(key=lambda x: x["score"], reverse=True)
+            all_classifications.append(classifications)
 
-        return ExtractOutput(entities=all_entities)
+        return ExtractOutput(
+            entities=[[] for _ in items],
+            classifications=all_classifications,
+        )
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""

@@ -25,48 +25,46 @@ def config_dirs():
         bundles_dir.mkdir()
         models_dir.mkdir()
 
-        # Create bundle configs
-        default_bundle = bundles_dir / "default.toml"
-        default_bundle.write_text("""
-[bundle]
-name = "default"
-priority = 10
-default = true
-models = [
-    "BAAI/bge-m3",
-    "intfloat/e5-small-v2",
-]
-""")
+        # Create bundle configs (YAML with adapters)
+        default_bundle = bundles_dir / "default.yaml"
+        default_bundle.write_text(
+            "name: default\n"
+            "priority: 10\n"
+            "default: true\n"
+            "adapters:\n"
+            "  - sie_server.adapters.bge_m3\n"
+            "  - sie_server.adapters.sentence_transformer\n"
+        )
 
-        sglang_bundle = bundles_dir / "sglang.toml"
-        sglang_bundle.write_text("""
-[bundle]
-name = "sglang"
-priority = 20
-models = [
-    "BAAI/bge-m3",
-    "Qwen/Qwen3-Embedding-8B",
-]
-""")
+        sglang_bundle = bundles_dir / "sglang.yaml"
+        sglang_bundle.write_text(
+            "name: sglang\npriority: 20\nadapters:\n  - sie_server.adapters.bge_m3\n  - sie_server.adapters.sglang\n"
+        )
 
-        # Create model configs (flat YAML files)
-        (models_dir / "baai-bge-m3.yaml").write_text("""
-name: BAAI/bge-m3
-hf_id: BAAI/bge-m3
-adapter: sie_server.adapters.bge_m3:BGEM3Adapter
-""")
+        # Create model configs (flat YAML files with profiles)
+        (models_dir / "baai-bge-m3.yaml").write_text(
+            "name: BAAI/bge-m3\n"
+            "hf_id: BAAI/bge-m3\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.bge_m3:BGEM3Adapter\n"
+        )
 
-        (models_dir / "intfloat-e5-small-v2.yaml").write_text("""
-name: intfloat/e5-small-v2
-hf_id: intfloat/e5-small-v2
-adapter: sie_server.adapters.sentence_transformer:SentenceTransformerAdapter
-""")
+        (models_dir / "intfloat-e5-small-v2.yaml").write_text(
+            "name: intfloat/e5-small-v2\n"
+            "hf_id: intfloat/e5-small-v2\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.sentence_transformer:SentenceTransformerAdapter\n"
+        )
 
-        (models_dir / "qwen-qwen3-embedding-8b.yaml").write_text("""
-name: Qwen/Qwen3-Embedding-8B
-hf_id: Qwen/Qwen3-Embedding-8B
-adapter: sie_server.adapters.sglang:SGLangAdapter
-""")
+        (models_dir / "qwen-qwen3-embedding-8b.yaml").write_text(
+            "name: Qwen/Qwen3-Embedding-8B\n"
+            "hf_id: Qwen/Qwen3-Embedding-8B\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.sglang:SGLangAdapter\n"
+        )
 
         yield bundles_dir, models_dir
 

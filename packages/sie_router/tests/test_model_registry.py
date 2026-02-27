@@ -1,5 +1,3 @@
-"""Tests for Router ModelRegistry."""
-
 import tempfile
 from pathlib import Path
 
@@ -62,7 +60,7 @@ class TestBundleInfo:
         info = BundleInfo(name="test", priority=10)
         assert info.name == "test"
         assert info.priority == 10
-        assert info.models == []
+        assert info.adapters == []
         assert info.default is False
 
 
@@ -86,55 +84,53 @@ def temp_config_dirs():
         bundles_dir.mkdir()
         models_dir.mkdir()
 
-        # Create bundle configs
-        default_bundle = bundles_dir / "default.toml"
-        default_bundle.write_text("""
-[bundle]
-name = "default"
-priority = 10
-default = true
-models = [
-    "BAAI/bge-m3",
-    "intfloat/e5-small-v2",
-    "cross-encoder/ms-marco-MiniLM-L-6-v2",
-]
-""")
+        # Create bundle configs (YAML with adapters list)
+        (bundles_dir / "default.yaml").write_text(
+            "name: default\n"
+            "priority: 10\n"
+            "default: true\n"
+            "adapters:\n"
+            "  - sie_server.adapters.bge_m3\n"
+            "  - sie_server.adapters.sentence_transformer\n"
+            "  - sie_server.adapters.cross_encoder\n"
+        )
 
-        sglang_bundle = bundles_dir / "sglang.toml"
-        sglang_bundle.write_text("""
-[bundle]
-name = "sglang"
-priority = 20
-models = [
-    "BAAI/bge-m3",
-    "Qwen/Qwen3-Embedding-8B",
-]
-""")
+        (bundles_dir / "sglang.yaml").write_text(
+            "name: sglang\npriority: 20\nadapters:\n  - sie_server.adapters.bge_m3\n  - sie_server.adapters.sglang\n"
+        )
 
-        # Create model configs (flat YAML structure)
-        (models_dir / "baai-bge-m3.yaml").write_text("""
-sie_id: BAAI/bge-m3
-hf_id: BAAI/bge-m3
-adapter: sie_server.adapters.bge_m3:BGEM3Adapter
-""")
+        # Create model configs with profiles containing adapter_path
+        (models_dir / "baai-bge-m3.yaml").write_text(
+            "sie_id: BAAI/bge-m3\n"
+            "hf_id: BAAI/bge-m3\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.bge_m3:BGEM3Adapter\n"
+        )
 
-        (models_dir / "intfloat-e5-small-v2.yaml").write_text("""
-sie_id: intfloat/e5-small-v2
-hf_id: intfloat/e5-small-v2
-adapter: sie_server.adapters.sentence_transformer:SentenceTransformerAdapter
-""")
+        (models_dir / "intfloat-e5-small-v2.yaml").write_text(
+            "sie_id: intfloat/e5-small-v2\n"
+            "hf_id: intfloat/e5-small-v2\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.sentence_transformer:SentenceTransformerAdapter\n"
+        )
 
-        (models_dir / "cross-encoder-ms-marco-minilm-l-6-v2.yaml").write_text("""
-sie_id: cross-encoder/ms-marco-MiniLM-L-6-v2
-hf_id: cross-encoder/ms-marco-MiniLM-L-6-v2
-adapter: sie_server.adapters.cross_encoder:CrossEncoderAdapter
-""")
+        (models_dir / "cross-encoder-ms-marco-minilm-l-6-v2.yaml").write_text(
+            "name: cross-encoder/ms-marco-MiniLM-L-6-v2\n"
+            "hf_id: cross-encoder/ms-marco-MiniLM-L-6-v2\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.cross_encoder:CrossEncoderAdapter\n"
+        )
 
-        (models_dir / "qwen-qwen3-embedding-8b.yaml").write_text("""
-sie_id: Qwen/Qwen3-Embedding-8B
-hf_id: Qwen/Qwen3-Embedding-8B
-adapter: sie_server.adapters.sglang:SGLangAdapter
-""")
+        (models_dir / "qwen-qwen3-embedding-8b.yaml").write_text(
+            "sie_id: Qwen/Qwen3-Embedding-8B\n"
+            "hf_id: Qwen/Qwen3-Embedding-8B\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.sglang:SGLangAdapter\n"
+        )
 
         yield bundles_dir, models_dir
 
@@ -174,11 +170,11 @@ class TestModelRegistry:
         assert "Qwen/Qwen3-Embedding-8B" in models
 
     def test_model_bundle_mapping(self, temp_config_dirs) -> None:
-        """Models are mapped to their compatible bundles."""
+        """Models are mapped to their compatible bundles via adapter matching."""
         bundles_dir, models_dir = temp_config_dirs
         registry = ModelRegistry(bundles_dir, models_dir)
 
-        # bge-m3 is in both default and sglang
+        # bge-m3 adapter is in both default and sglang
         info = registry.get_model_info("BAAI/bge-m3")
         assert info is not None
         assert "default" in info.bundles
@@ -186,7 +182,7 @@ class TestModelRegistry:
         # Default should be first (lower priority)
         assert info.bundles[0] == "default"
 
-        # e5-small-v2 is only in default
+        # e5-small-v2 uses sentence_transformer adapter, only in default
         info = registry.get_model_info("intfloat/e5-small-v2")
         assert info is not None
         assert info.bundles == ["default"]
@@ -262,7 +258,7 @@ class TestModelRegistry:
         assert info.name == "default"
         assert info.priority == 10
         assert info.default is True
-        assert "BAAI/bge-m3" in info.models
+        assert "sie_server.adapters.bge_m3" in info.adapters
 
         info = registry.get_bundle_info("nonexistent")
         assert info is None
@@ -292,22 +288,16 @@ class TestModelRegistry:
         assert "BAAI/bge-m3" in registry.list_models()
 
         # Add a new bundle
-        new_bundle = bundles_dir / "new.toml"
-        new_bundle.write_text("""
-[bundle]
-name = "new"
-priority = 5
-models = [
-    "new/model",
-]
-""")
+        (bundles_dir / "new.yaml").write_text("name: new\npriority: 5\nadapters:\n  - sie_server.adapters.test\n")
 
-        # Add a new model (flat YAML structure)
-        (models_dir / "new-model.yaml").write_text("""
-sie_id: new/model
-hf_id: new/model
-adapter: sie_server.adapters.test:TestAdapter
-""")
+        # Add a new model
+        (models_dir / "new-model.yaml").write_text(
+            "sie_id: new/model\n"
+            "hf_id: new/model\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.test:TestAdapter\n"
+        )
 
         # Reload
         registry.reload()
@@ -345,19 +335,16 @@ class TestModelRegistryEmptyDirectories:
             bundles_dir.mkdir()
 
             # Create a bundle
-            (bundles_dir / "default.toml").write_text("""
-[bundle]
-name = "default"
-priority = 10
-models = ["test/model"]
-""")
+            (bundles_dir / "default.yaml").write_text(
+                "name: default\npriority: 10\nadapters:\n  - sie_server.adapters.test\n"
+            )
 
             registry = ModelRegistry(bundles_dir, models_dir)
 
             # Bundle should be loaded
             assert "default" in registry.list_bundles()
-            # Model from bundle should be tracked (even without config)
-            assert "test/model" in registry.list_models()
+            # No models (models dir doesn't exist)
+            assert registry.list_models() == []
 
     def test_empty_bundle_file(self) -> None:
         """Registry handles empty bundle files gracefully."""
@@ -369,7 +356,7 @@ models = ["test/model"]
             models_dir.mkdir()
 
             # Create an empty bundle file
-            (bundles_dir / "empty.toml").write_text("")
+            (bundles_dir / "empty.yaml").write_text("")
 
             registry = ModelRegistry(bundles_dir, models_dir)
 
@@ -377,11 +364,11 @@ models = ["test/model"]
             assert len(registry.list_bundles()) >= 0  # May or may not include empty
 
 
-class TestModelRegistryModelFromBundleOnly:
-    """Test cases for models that appear in bundles but not in models directory."""
+class TestModelRegistryAdapterMatching:
+    """Test cases for adapter-based model→bundle matching."""
 
-    def test_model_in_bundle_not_in_directory(self) -> None:
-        """Model listed in bundle but missing from models dir is still tracked."""
+    def test_model_with_no_matching_adapter(self) -> None:
+        """Model whose adapter isn't in any bundle has no bundles."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             bundles_dir = tmppath / "bundles"
@@ -389,33 +376,57 @@ class TestModelRegistryModelFromBundleOnly:
             bundles_dir.mkdir()
             models_dir.mkdir()
 
-            (bundles_dir / "default.toml").write_text("""
-[bundle]
-name = "default"
-priority = 10
-models = ["missing/model", "existing/model"]
-""")
+            (bundles_dir / "default.yaml").write_text(
+                "name: default\npriority: 10\nadapters:\n  - sie_server.adapters.sentence_transformer\n"
+            )
 
-            # Only create config for one model (flat YAML structure)
-            (models_dir / "existing-model.yaml").write_text("""
-sie_id: existing/model
-hf_id: existing/model
-adapter: test
-""")
+            (models_dir / "orphan.yaml").write_text(
+                "sie_id: orphan/model\n"
+                "profiles:\n"
+                "  default:\n"
+                "    adapter_path: sie_server.adapters.unknown:UnknownAdapter\n"
+            )
 
             registry = ModelRegistry(bundles_dir, models_dir)
 
-            # Both models should be in the list
-            models = registry.list_models()
-            assert "missing/model" in models
-            assert "existing/model" in models
+            # Model exists but has no bundles
+            assert "orphan/model" in registry.list_models()
+            info = registry.get_model_info("orphan/model")
+            assert info is not None
+            assert info.bundles == []
 
-            # Both should be resolvable
-            bundle = registry.resolve_bundle("missing/model")
-            assert bundle == "default"
+    def test_model_multiple_profiles_different_adapters(self) -> None:
+        """Model with multiple profiles matches bundles from any profile."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            bundles_dir = tmppath / "bundles"
+            models_dir = tmppath / "models"
+            bundles_dir.mkdir()
+            models_dir.mkdir()
 
-            bundle = registry.resolve_bundle("existing/model")
-            assert bundle == "default"
+            (bundles_dir / "default.yaml").write_text(
+                "name: default\npriority: 10\nadapters:\n  - sie_server.adapters.sentence_transformer\n"
+            )
+
+            (bundles_dir / "sglang.yaml").write_text(
+                "name: sglang\npriority: 20\nadapters:\n  - sie_server.adapters.sglang\n"
+            )
+
+            (models_dir / "multi.yaml").write_text(
+                "name: multi/model\n"
+                "profiles:\n"
+                "  cpu:\n"
+                "    adapter_path: sie_server.adapters.sentence_transformer:STAdapter\n"
+                "  gpu:\n"
+                "    adapter_path: sie_server.adapters.sglang:SGLangAdapter\n"
+            )
+
+            registry = ModelRegistry(bundles_dir, models_dir)
+
+            info = registry.get_model_info("multi/model")
+            assert info is not None
+            assert "default" in info.bundles
+            assert "sglang" in info.bundles
 
 
 class TestModelRegistryThreadSafety:

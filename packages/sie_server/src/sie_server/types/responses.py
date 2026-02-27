@@ -179,7 +179,6 @@ class ErrorCode(StrEnum):
     INFERENCE_ERROR = "INFERENCE_ERROR"
     QUEUE_FULL = "QUEUE_FULL"
     INTERNAL_ERROR = "INTERNAL_ERROR"
-    DEPENDENCY_CONFLICT = "DEPENDENCY_CONFLICT"
 
 
 class ErrorDetail(TypedDict, total=False):

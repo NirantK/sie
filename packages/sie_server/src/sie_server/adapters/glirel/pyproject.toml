@@ -1,9 +1,0 @@
-[project]
-name = "sie-adapter-glirel"
-version = "0.1.0"
-description = "GLiREL adapter for SIE - zero-shot relation extraction"
-requires-python = ">=3.12"
-dependencies = [
-    "glirel>=1.0,<2",
-    "loguru>=0.7,<1",
-]

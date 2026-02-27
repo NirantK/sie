@@ -23,7 +23,7 @@ from sie_server.adapters.base import ModelAdapter, ModelCapabilities, ModelDims
 from sie_server.config.model import ComputePrecision
 from sie_server.core.inference_output import ExtractOutput
 from sie_server.core.preprocessor import CharCountPreprocessor
-from sie_server.types.responses import Entity
+from sie_server.types.responses import Classification
 
 if TYPE_CHECKING:
     from gliclass import ZeroShotClassificationPipeline  # ty:ignore[unresolved-import]
@@ -210,27 +210,27 @@ class GLiClassAdapter(ModelAdapter):
             )
 
         # Convert to our format
-        # Classification results are converted to entities with label as the entity label
-        all_entities = []
+        all_classifications: list[list[Classification]] = []
         for item_results in batch_results:
             # Each item's results is a list of {label, score} dicts
-            entities = []
+            classifications: list[Classification] = []
             for result in item_results:
-                # Convert classification to entity format
-                entities.append(
-                    Entity(
-                        text=result["label"],
-                        label="classification",
+                classifications.append(
+                    Classification(
+                        label=result["label"],
                         score=float(result["score"]),
                     )
                 )
 
             # Sort by score descending
-            entities.sort(key=lambda x: x["score"], reverse=True)
+            classifications.sort(key=lambda x: x["score"], reverse=True)
 
-            all_entities.append(entities)
+            all_classifications.append(classifications)
 
-        return ExtractOutput(entities=all_entities)
+        return ExtractOutput(
+            entities=[[] for _ in items],
+            classifications=all_classifications,
+        )
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""

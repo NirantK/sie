@@ -53,7 +53,6 @@ ComputePrecision = Literal["float16", "bfloat16", "float32"]
 
 _ERR_NOT_LOADED = "Model not loaded. Call load() first."
 _ERR_REQUIRES_TEXT = "ColBERTAdapter requires text input"
-_ERR_CPU_NOT_SUPPORTED = "ColBERTAdapter requires CUDA for Flash Attention. Use a different adapter for CPU."
 
 
 class ColBERTAdapter(ModelAdapter):
@@ -133,6 +132,7 @@ class ColBERTAdapter(ModelAdapter):
         self._linear: torch.nn.Linear | None = None
         self._device: str | None = None
         self._actual_token_dim: int | None = None
+        self._is_cuda: bool = False  # Set during load()
         self._native_mode: bool = False  # Set during load()
         self._expansion_token_id: int | None = None  # Set during load() if query_expansion
         self._query_prefix_id: int | None = None  # Set during load() for special token prefixes
@@ -157,17 +157,12 @@ class ColBERTAdapter(ModelAdapter):
         """Load the model onto the specified device.
 
         Args:
-            device: Device string (must be "cuda" or "cuda:X").
-
-        Raises:
-            RuntimeError: If device is not CUDA (flash attention requires GPU).
+            device: Device string (e.g. "cuda", "cuda:0", "mps", "cpu").
         """
-        if not device.startswith("cuda"):
-            raise RuntimeError(_ERR_CPU_NOT_SUPPORTED)
-
         from transformers import AutoConfig, AutoModel, AutoTokenizer
 
         self._device = device
+        self._is_cuda = device.startswith("cuda")
         dtype = self._resolve_dtype()
 
         logger.info(
@@ -206,7 +201,7 @@ class ColBERTAdapter(ModelAdapter):
             self._model_name_or_path,
             trust_remote_code=True,
         )
-        self._native_mode = self._should_use_native_mode(config)
+        self._native_mode = self._is_cuda and self._should_use_native_mode(config)
 
         if self._native_mode:
             # Use model's native forward with flash_attention_2

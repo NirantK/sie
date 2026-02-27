@@ -93,7 +93,6 @@ class ModelConfig(BaseModel):
     hf_id: str | None = None
     hf_revision: str | None = None
     weights_path: Path | None = None
-    dependencies: list[str] = Field(default_factory=list)
     inputs: InputModalities = InputModalities()
     tasks: Tasks
     max_sequence_length: int | None = None

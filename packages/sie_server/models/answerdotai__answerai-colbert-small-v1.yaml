@@ -29,6 +29,7 @@ profiles:
         normalize: true
         query_max_length: 32
         skip_special_tokens: false
+        query_expansion: false
         query_prefix: '[unused0] '
         doc_prefix: '[unused1] '
       runtime:

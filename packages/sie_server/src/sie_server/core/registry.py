@@ -23,7 +23,6 @@ from sie_sdk.storage import is_cloud_path
 from sie_server.adapters.base import ModelAdapter
 from sie_server.config.engine import EngineConfig
 from sie_server.config.model import ModelConfig
-from sie_server.core.deps import DependencyConflictError, check_model_dependencies
 from sie_server.core.disk_cache import DiskCacheConfig, ModelDiskCacheManager
 from sie_server.core.hot_reload import HotReloader
 from sie_server.core.loader import load_model_configs
@@ -273,11 +272,10 @@ class ModelRegistry:
         return self._load_lock
 
     def _check_model_loadable(self, name: str) -> tuple[ModelConfig, Path]:
-        """Check if a model can be loaded (exists and deps are compatible).
+        """Check if a model can be loaded (exists in registry).
 
-        This method performs all pre-load validation synchronously:
-        1. Config discovery - rescans models_dir if model not found
-        2. Dependency checking - verifies adapter/model deps match installed packages
+        This method performs config discovery synchronously:
+        rescans models_dir if model not found.
 
         Call this BEFORE starting any background loading to surface errors early.
 
@@ -289,7 +287,6 @@ class ModelRegistry:
 
         Raises:
             KeyError: If model not found after rescan.
-            DependencyConflictError: If model dependencies conflict with installed packages.
         """
         # On-demand config discovery
         if name not in self._configs:
@@ -301,11 +298,6 @@ class ModelRegistry:
 
         config = self._configs[name]
         model_dir = self._model_dirs.get(name, Path())
-
-        # Check dependencies before loading
-        conflicts = check_model_dependencies(config, model_dir)
-        if conflicts:
-            raise DependencyConflictError(name, conflicts)
 
         return config, model_dir
 
@@ -365,7 +357,6 @@ class ModelRegistry:
         Raises:
             KeyError: If model not found.
             ValueError: If model already loaded.
-            DependencyConflictError: If model dependencies conflict with installed packages.
             ImportError: If adapter cannot be loaded.
             RuntimeError: If OOM persists after eviction.
         """
@@ -431,10 +422,9 @@ class ModelRegistry:
 
         Raises:
             KeyError: If model not found after rescan.
-            DependencyConflictError: If model dependencies conflict with installed packages.
             RuntimeError: If OOM persists after eviction.
         """
-        # Pre-load validation: config discovery + dependency checking
+        # Pre-load validation: config discovery
         # Done before acquiring lock to surface errors early
         self._check_model_loadable(name)
 
@@ -527,9 +517,9 @@ class ModelRegistry:
         This method triggers model loading in a background task and returns
         immediately. Use is_loading() to check if load is in progress.
 
-        Pre-load validation (config existence, dependency checking) is performed
+        Pre-load validation (config existence) is performed
         synchronously before starting the background task, so errors like
-        DependencyConflictError are raised immediately.
+        KeyError are raised immediately.
 
         Args:
             name: Model name.
@@ -540,7 +530,6 @@ class ModelRegistry:
 
         Raises:
             KeyError: If model not found.
-            DependencyConflictError: If model dependencies conflict with installed packages.
         """
         # Already loaded - no action needed
         if name in self._loaded:

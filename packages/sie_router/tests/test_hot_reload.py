@@ -1,9 +1,3 @@
-"""Tests for Router ConfigWatcher (hot reload).
-
-Tests the file watcher that enables config hot reload for ModelRegistry.
-This is the same code path used by git-sync in production.
-"""
-
 from __future__ import annotations
 
 import tempfile
@@ -26,24 +20,19 @@ def temp_config_dirs():
         bundles_dir.mkdir()
         models_dir.mkdir()
 
-        # Create initial bundle config
-        default_bundle = bundles_dir / "default.toml"
-        default_bundle.write_text("""
-[bundle]
-name = "default"
-priority = 10
-default = true
-models = [
-    "test-org/initial-model",
-]
-""")
+        # Create initial bundle config (YAML with adapters)
+        (bundles_dir / "default.yaml").write_text(
+            "name: default\npriority: 10\ndefault: true\nadapters:\n  - sie_server.adapters.test\n"
+        )
 
-        # Create initial model config (flat YAML structure)
-        (models_dir / "test-org-initial-model.yaml").write_text("""
-name: test-org/initial-model
-hf_id: test-org/initial-model
-adapter: sie_server.adapters.test:TestAdapter
-""")
+        # Create initial model config with profiles
+        (models_dir / "test-org-initial-model.yaml").write_text(
+            "name: test-org/initial-model\n"
+            "hf_id: test-org/initial-model\n"
+            "profiles:\n"
+            "  default:\n"
+            "    adapter_path: sie_server.adapters.test:TestAdapter\n"
+        )
 
         yield bundles_dir, models_dir
 
@@ -105,13 +94,9 @@ class TestConfigWatcher:
         watcher.start()
         try:
             # Add a new bundle file
-            new_bundle = bundles_dir / "new-bundle.toml"
-            new_bundle.write_text("""
-[bundle]
-name = "new-bundle"
-priority = 5
-models = ["new-org/new-model"]
-""")
+            (bundles_dir / "new-bundle.yaml").write_text(
+                "name: new-bundle\npriority: 5\nadapters:\n  - sie_server.adapters.new\n"
+            )
 
             # Wait for debounce + processing
             time.sleep(0.05)
@@ -127,18 +112,10 @@ models = ["new-org/new-model"]
         """Adding a new model config triggers reload."""
         bundles_dir, models_dir = temp_config_dirs
 
-        # Add model to bundle first
-        default_bundle = bundles_dir / "default.toml"
-        default_bundle.write_text("""
-[bundle]
-name = "default"
-priority = 10
-default = true
-models = [
-    "test-org/initial-model",
-    "new-org/new-model",
-]
-""")
+        # Add adapter to bundle first
+        (bundles_dir / "default.yaml").write_text(
+            "name: default\npriority: 10\ndefault: true\nadapters:\n  - sie_server.adapters.test\n"
+        )
 
         registry = ModelRegistry(bundles_dir, models_dir)
 
@@ -147,12 +124,14 @@ models = [
 
         watcher.start()
         try:
-            # Add a new model config (flat YAML structure)
-            (models_dir / "new-org-new-model.yaml").write_text("""
-name: new-org/new-model
-hf_id: new-org/new-model
-adapter: sie_server.adapters.test:TestAdapter
-""")
+            # Add a new model config with matching adapter
+            (models_dir / "new-org-new-model.yaml").write_text(
+                "name: new-org/new-model\n"
+                "hf_id: new-org/new-model\n"
+                "profiles:\n"
+                "  default:\n"
+                "    adapter_path: sie_server.adapters.test:TestAdapter\n"
+            )
 
             # Wait for debounce + processing
             time.sleep(0.02)
@@ -186,13 +165,7 @@ adapter: sie_server.adapters.test:TestAdapter
         try:
             # Make multiple rapid changes
             for i in range(5):
-                bundle = bundles_dir / f"bundle-{i}.toml"
-                bundle.write_text(f"""
-[bundle]
-name = "bundle-{i}"
-priority = {20 + i}
-models = []
-""")
+                (bundles_dir / f"bundle-{i}.yaml").write_text(f"name: bundle-{i}\npriority: {20 + i}\nadapters: []\n")
             # Changes are intentionally back-to-back to exercise debounce.
 
             # Wait for at least one reload to occur
@@ -255,12 +228,7 @@ models = []
 
             # Only create bundles dir
             bundles_dir.mkdir()
-            (bundles_dir / "default.toml").write_text("""
-[bundle]
-name = "default"
-priority = 10
-models = []
-""")
+            (bundles_dir / "default.yaml").write_text("name: default\npriority: 10\nadapters: []\n")
 
             registry = ModelRegistry(bundles_dir, models_dir)
             watcher = ConfigWatcher(registry, bundles_dir, models_dir)
@@ -274,24 +242,24 @@ models = []
 class TestConfigWatcherPatterns:
     """Tests for config file pattern matching."""
 
-    def test_bundle_pattern_toml(self, temp_config_dirs) -> None:
-        """Watches *.toml files in bundles directory."""
+    def test_bundle_pattern_yaml(self, temp_config_dirs) -> None:
+        """Watches *.yaml files in bundles directory."""
         bundles_dir, models_dir = temp_config_dirs
 
         watcher = ConfigWatcher(
             MagicMock(),
             bundles_dir,
             models_dir,
-            config=WatcherConfig(bundle_patterns=("*.toml",)),
+            config=WatcherConfig(bundle_patterns=("*.yaml",)),
         )
 
         # Should match
-        assert watcher._is_config_file(bundles_dir / "default.toml")
-        assert watcher._is_config_file(bundles_dir / "new.toml")
+        assert watcher._is_config_file(bundles_dir / "default.yaml")
+        assert watcher._is_config_file(bundles_dir / "new.yaml")
 
         # Should not match
         assert not watcher._is_config_file(bundles_dir / "readme.md")
-        assert not watcher._is_config_file(bundles_dir / "some.yaml")  # YAML in bundles dir not a config
+        assert not watcher._is_config_file(bundles_dir / "some.toml")
 
     def test_model_pattern_yaml(self, temp_config_dirs) -> None:
         """Watches *.yaml files in models directory."""
@@ -331,12 +299,9 @@ class TestConfigWatcherWithMockedRegistry:
         watcher.start()
         try:
             # Modify a bundle file
-            (bundles_dir / "default.toml").write_text("""
-[bundle]
-name = "default"
-priority = 10
-models = ["updated/model"]
-""")
+            (bundles_dir / "default.yaml").write_text(
+                "name: default\npriority: 10\nadapters:\n  - sie_server.adapters.updated\n"
+            )
 
             time.sleep(0.02)
 
@@ -362,7 +327,7 @@ models = ["updated/model"]
         watcher.start()
         try:
             # Modify a bundle file
-            (bundles_dir / "default.toml").write_text("invalid content")
+            (bundles_dir / "default.yaml").write_text("invalid: content\n")
 
             time.sleep(0.05)
 

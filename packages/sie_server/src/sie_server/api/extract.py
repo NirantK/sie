@@ -14,7 +14,6 @@ from sie_server.api.helpers import (
 from sie_server.api.options import resolve_runtime_options
 from sie_server.api.serialization import MsgPackResponse
 from sie_server.api.validation import validate_extract_request, validate_machine_profile_header
-from sie_server.core.deps import DependencyConflictError
 from sie_server.core.inference_output import ExtractOutput
 from sie_server.core.prepared import ExtractPreparedItem
 from sie_server.core.timing import RequestTiming
@@ -316,18 +315,7 @@ async def extract(
         # Continue model state validation
         model_checker.check_not_unloading()
         model_checker.check_not_loading()
-        try:
-            await model_checker.ensure_loaded(device)
-        except DependencyConflictError as e:
-            span.set_attribute("error", "dependency_conflict")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": ErrorCode.DEPENDENCY_CONFLICT.value,
-                    "message": str(e),
-                    "conflicts": [c.to_dict() for c in e.conflicts],
-                },
-            ) from e
+        await model_checker.ensure_loaded(device)
 
         # Get params and resolve runtime options (outside inference try/except
         # so ValueError from invalid profiles returns 400, not 500)

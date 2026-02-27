@@ -1,0 +1,13 @@
+name: florence2
+priority: 50
+adapters:
+- sie_server.adapters.donut
+- sie_server.adapters.florence2
+deps:
+  # florence2
+  timm: '>=0.9.0'
+  # Pin torch — flash-attn's unpinned torch dep can pull in 2.10+ which breaks torchvision
+  torch: '>=2.9,<2.10'
+  flash-attn:
+    url: https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.7.4+cu128torch2.9-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
+    marker: sys_platform == 'linux'

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import typer
-from sie_sdk.bundle_utils import match_bundle_models
+from sie_sdk.bundle_utils import find_bundle_for_models, match_bundle_models
 
 import sie_server
 from sie_server.app.app_state_config import AppStateConfig
@@ -91,7 +91,7 @@ def resolve_deps(
     Use --cpu flag when building CPU-only images to exclude flash-attn
     and other CUDA-only dependencies.
     """
-    from sie_server.core.deps import _collect_model_list_deps, collect_bundle_deps
+    from sie_server.core.deps import collect_bundle_deps
 
     models_path = Path(models_dir).resolve()
     bundles_dir = _DEFAULT_BUNDLES_DIR
@@ -104,11 +104,18 @@ def resolve_deps(
         typer.echo("Error: Either --bundle or --models must be specified", err=True)
         raise typer.Exit(1)
 
+    # Resolve bundle name: explicit --bundle, or find best bundle for --models
     if bundle:
-        result = collect_bundle_deps(bundle, bundles_dir, models_path, exclude_cuda=cpu)
+        resolved_bundle = bundle
     else:
         model_list = [m.strip() for m in models.split(",") if m.strip()]  # type: ignore[union-attr]
-        result = _collect_model_list_deps(model_list, models_path, exclude_cuda=cpu)
+        matched = find_bundle_for_models(model_list, bundles_dir, models_path)
+        if not matched:
+            typer.echo(f"Error: No bundle found covering models: {', '.join(model_list)}", err=True)
+            raise typer.Exit(1)
+        resolved_bundle = matched
+
+    result = collect_bundle_deps(resolved_bundle, bundles_dir, models_path, exclude_cuda=cpu)
 
     if result.conflicts:
         if output_json:

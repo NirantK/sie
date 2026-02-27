@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from sie_server.api.helpers import extract_request_context
 from sie_server.api.validation import validate_machine_profile_header
-from sie_server.core.deps import DependencyConflictError
 from sie_server.core.encode_pipeline import EncodePipeline
 from sie_server.core.worker import QueueFullError
 from sie_server.observability.metrics import record_request
@@ -208,18 +207,6 @@ async def _load_model_if_needed(registry: object, model: str, device: str, span:
         try:
             logger.info("Loading model %s on device %s", model, device)
             await registry.load_async(model, device=device)  # type: ignore[attr-defined]
-        except DependencyConflictError as e:
-            span.set_attribute("error", "dependency_conflict")  # type: ignore[attr-defined]
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": {
-                        "code": "dependency_conflict",
-                        "message": str(e),
-                        "type": "server_error",
-                    }
-                },
-            ) from e
         except Exception as e:
             logger.exception("Failed to load model %s", model)
             span.set_attribute("error", "model_load_failed")  # type: ignore[attr-defined]
@@ -307,7 +294,6 @@ def _build_embeddings_response(
         200: {"description": "Embeddings generated successfully"},
         400: {"description": "Invalid request"},
         404: {"description": "Model not found"},
-        409: {"description": "Dependency conflict"},
         503: {"description": "Service unavailable"},
     },
 )

@@ -172,7 +172,7 @@ def _get_docker_client() -> Any:
     try:
         import docker
 
-        return docker.from_env()
+        return docker.from_env(timeout=300)
     except ImportError:
         pytest.skip("docker package not installed")
     except Exception as e:  # noqa: BLE001 — Docker API errors are varied
@@ -263,6 +263,8 @@ def sie_docker_server() -> Generator[str]:
     - Dependency issues
 
     Set SIE_DOCKER_IMAGE env var to use a pre-built image (skips build).
+
+    Regression test for: https://github.com/superlinked/sie-internal/issues/10
     """
     docker_client = _get_docker_client()
 

@@ -1,22 +1,12 @@
-"""Request proxy for forwarding requests to workers.
-
-Handles:
-- Request forwarding with content passthrough
-- Pool-aware routing via X-SIE-Pool header or gpu="pool_name/gpu_type" param
-- ModelRegistry-based bundle resolution (priority-based auto-selection or explicit override)
-- 404/409 fast-fail for unknown models or incompatible bundle overrides
-- 202 responses when no capacity available (triggers KEDA autoscaling)
-- Retry-After header for provisioning delays
-"""
-
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sie_sdk.types import PoolListItem, PoolResponse
 
 from sie_router.health import CONFIGURED_GPU_TYPES
@@ -33,6 +23,22 @@ from sie_router.responses import pool_to_list_item, pool_to_response
 from sie_router.types import AuditEntry, ProvisioningResponse
 
 logger = logging.getLogger(__name__)
+
+
+class _AsyncIterStream(httpx.AsyncByteStream):
+    """Wrap an async iterator for httpx content= compatibility."""
+
+    def __init__(self, it: AsyncIterator[bytes]) -> None:
+        self._it = it
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._it:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return
+
+
 audit_logger = logging.getLogger("sie_router.audit")
 
 router = APIRouter(tags=["proxy"])
@@ -144,9 +150,14 @@ def _emit_audit_log(
     audit_logger.info(message, extra=entry.to_dict())
 
 
-def _filter_headers(headers: dict[str, str]) -> dict[str, str]:
+# Headers stripped when proxying streamed bodies (in addition to hop-by-hop)
+STREAMED_BODY_STRIP_HEADERS = HOP_BY_HOP_HEADERS | {"content-length"}
+
+
+def _filter_headers(headers: dict[str, str], *, strip_content_length: bool = False) -> dict[str, str]:
     """Filter out hop-by-hop headers for forwarding."""
-    return {k: v for k, v in headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
+    excluded = STREAMED_BODY_STRIP_HEADERS if strip_content_length else HOP_BY_HOP_HEADERS
+    return {k: v for k, v in headers.items() if k.lower() not in excluded}
 
 
 def _make_provisioning_response(gpu: str) -> JSONResponse:
@@ -191,21 +202,23 @@ def _make_unconfigured_gpu_response(gpu: str, configured: list[str]) -> JSONResp
 
 
 async def _forward_request(
+    http_client: httpx.AsyncClient,
     worker_url: str,
     method: str,
     path: str,
     headers: dict[str, str],
-    body: bytes,
+    request_stream: AsyncIterator[bytes],
     timeout_s: float = 300.0,
 ) -> Response:
     """Forward a request to a worker.
 
     Args:
+        http_client: Shared httpx client for connection pooling.
         worker_url: Worker base URL.
         method: HTTP method.
         path: Request path.
         headers: Request headers (filtered).
-        body: Request body.
+        request_stream: Async iterator of request body chunks (streamed to worker).
         timeout_s: Request timeout in seconds.
 
     Returns:
@@ -213,19 +226,30 @@ async def _forward_request(
     """
     url = f"{worker_url}{path}"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
-        response = await client.request(
-            method=method,
-            url=url,
-            headers=headers,
-            content=body,
-        )
+    req = http_client.build_request(
+        method=method,
+        url=url,
+        headers=headers,
+        content=_AsyncIterStream(request_stream),
+        timeout=httpx.Timeout(timeout_s),
+    )
+
+    response = await http_client.send(req, stream=True)
 
     # Filter response headers
-    response_headers = _filter_headers(dict(response.headers))
+    response_headers = _filter_headers(dict(response.headers), strip_content_length=True)
 
-    return Response(
-        content=response.content,
+    async def _stream_body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+        except httpx.StreamError:
+            logger.error("Stream interrupted from %s", url)
+        finally:
+            await response.aclose()
+
+    return StreamingResponse(
+        content=_stream_body(),
         status_code=response.status_code,
         headers=response_headers,
         media_type=response.headers.get("content-type"),
@@ -407,8 +431,15 @@ async def _proxy_request(
         )
 
     # Forward request to worker
-    headers = _filter_headers(dict(request.headers))
-    body = await request.body()
+    http_client: httpx.AsyncClient = request.app.state.http_client
+    headers = _filter_headers(dict(request.headers), strip_content_length=True)
+    body_bytes = 0
+
+    async def counting_stream() -> AsyncIterator[bytes]:
+        nonlocal body_bytes
+        async for chunk in request.stream():
+            body_bytes += len(chunk)
+            yield chunk
 
     # Rebuild path with model_name (without bundle prefix) for the worker
     # Original path format: /v1/{endpoint}/{model_with_possible_bundle}
@@ -429,16 +460,20 @@ async def _proxy_request(
 
     try:
         response = await _forward_request(
+            http_client=http_client,
             worker_url=worker.url,
             method=request.method,
             path=forward_path,
             headers=headers,
-            body=body,
+            request_stream=counting_stream(),
         )
 
         # Record request for QPS tracking
         registry.record_request(worker.url)
         status_code = str(response.status_code)
+
+        # Add worker identification header for per-worker metrics tracking
+        response.headers["X-SIE-Worker"] = worker.name or worker.url
 
         return response
 
@@ -471,7 +506,7 @@ async def _proxy_request(
             worker=worker.name,
             status=status_code,
             latency_ms=round(elapsed * 1000, 1),
-            body_bytes=len(body),
+            body_bytes=body_bytes,
         )
 
 
