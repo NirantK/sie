@@ -96,7 +96,7 @@ The same code works against a production cluster. SIE ships a load-balancing rou
 helm install sie deploy/helm/sie-cluster/ -f values.yaml
 ```
 
-[Deployment guide ->](https://sie.dev/docs/deployment/docker)
+[Deployment overview ->](https://sie.dev/docs)
 
 ---
 
