@@ -1,31 +1,52 @@
+<div align="center">
+
 <!-- TODO: Replace with actual logo/banner image -->
 
-<h1 align="center">⚡ SIE</h1>
-<h4 align="center">Superlinked Inference Engine</h4>
-<p align="center"><strong>Open-source inference server and production cluster for embeddings, reranking, and extraction.</strong></p>
-<p align="center">85+ models. Three functions. From laptop to Kubernetes. All Apache 2.0.</p>
+<h1>⚡ SIE</h1>
+
+Superlinked Inference Engine
+
+<p><strong>Open-source inference server and production cluster for embeddings, reranking, and extraction.</strong></p>
+<p>85+ models. Three functions. From laptop to Kubernetes. All Apache 2.0.</p>
+
+<p>
+  <a href="https://sie.dev/docs">Docs</a> ·
+  <a href="https://sie.dev/docs/quickstart">Quickstart</a> ·
+  <a href="https://sie.dev/docs/reference/sdk">API Reference</a> ·
+  <a href="https://sie.dev/docs/reference/models">Models</a>
+</p>
 
 <!-- TODO: Add social preview / OG image (1280x640) -->
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
-  <a href="https://pypi.org/project/sie-sdk/"><img src="https://img.shields.io/pypi/v/sie-sdk?style=flat-square" alt="PyPI"></a>
-  <a href="https://github.com/superlinked/sie/stargazers"><img src="https://img.shields.io/github/stars/superlinked/sie?style=flat-square" alt="GitHub stars"></a>
-</p>
+
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/sie-sdk?style=flat-square)](https://pypi.org/project/sie-sdk/)
+[![GitHub stars](https://img.shields.io/github/stars/superlinked/sie?style=flat-square)](https://github.com/superlinked/sie/stargazers)
 
 <!--
   Badges to add when ready:
-  - CI: <a href="https://github.com/superlinked/sie/actions"><img src="https://img.shields.io/github/actions/workflow/status/superlinked/sie/ci.yml?style=flat-square" alt="CI"></a>  (needs ci.yml workflow)
-  - Downloads: <a href="https://pypi.org/project/sie-sdk/"><img src="https://img.shields.io/pypi/dm/sie-sdk?style=flat-square" alt="Downloads"></a>  (needs sie-sdk published)
-  - Discord: <a href="https://discord.gg/superlinked"><img src="https://img.shields.io/discord/GUILD_ID?style=flat-square&label=Discord" alt="Discord"></a>  (needs real GUILD_ID)
+  - CI: ![CI](https://img.shields.io/github/actions/workflow/status/superlinked/sie/ci.yml?style=flat-square)  (needs ci.yml workflow)
+  - Downloads: ![Downloads](https://img.shields.io/pypi/dm/sie-sdk?style=flat-square)  (needs sie-sdk published)
+  - Discord: ![Discord](https://img.shields.io/discord/GUILD_ID?style=flat-square&label=Discord)  (needs real GUILD_ID)
 -->
 
-<p align="center">
-  <a href="https://sie.dev/docs">Docs</a> · <a href="https://sie.dev/docs/quickstart">Quickstart</a> · <a href="https://sie.dev/docs/reference/sdk">API Reference</a> · <a href="https://sie.dev/docs/reference/models">Models</a>
-</p>
+</div>
 
----
+## About SIE
 
-### Quickstart
+SIE is an open-source inference engine that serves embeddings, reranking, and entity extraction through a single unified API. It replaces the patchwork of separate model servers with one system that handles 85+ models across dense, sparse, multi-vector, vision, and cross-encoder architectures.
+
+:star: _If SIE saves you time, star this repo - it helps others find it!_
+
+### SIE Open Source:
+
+- Three functions (`encode`, `score`, `extract`) cover the entire embedding, reranking, and extraction pipeline
+- 85+ pre-configured models, hot-swappable, all quality-verified against MTEB in CI
+- Serves multiple models simultaneously with on-demand loading and LRU eviction
+- Ships the full production stack: load-balancing router, KEDA autoscaling, Grafana dashboards, Terraform for GKE/EKS
+- Integrates with LangChain, LlamaIndex, Haystack, DSPy, CrewAI, and Chroma
+- OpenAI-compatible `/v1/embeddings` endpoint for drop-in migration
+
+## Quickstart
 
 Or try it in your browser, no install needed: [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/superlinked/sie/blob/main/notebooks/quickstart.ipynb)
 
@@ -39,8 +60,8 @@ sie-server serve            # auto-detects CUDA / Apple Silicon / CPU
 Or with Docker:
 
 ```bash
-docker run -p 8080:8080 ghcr.io/superlinked/sie:latest             # CPU
-docker run --gpus all -p 8080:8080 ghcr.io/superlinked/sie:latest  # GPU
+docker run -p 8080:8080 ghcr.io/superlinked/sie-server:latest             # CPU
+docker run --gpus all -p 8080:8080 ghcr.io/superlinked/sie-server:latest  # GPU
 ```
 
 **2. Install the SDK and go**
@@ -112,10 +133,6 @@ Dense, sparse, multi-vector, vision, rerankers, extractors. All pre-configured. 
 [**Examples**](examples/) - End-to-end project gallery. [Add yours ->](examples/)
 
 ---
-
-<p align="center">
-  If SIE saves you time, a ⭐ helps others find it.
-</p>
 
 <p align="center">
   <a href="https://sie.dev/docs"><strong>sie.dev/docs</strong></a> · Apache 2.0
