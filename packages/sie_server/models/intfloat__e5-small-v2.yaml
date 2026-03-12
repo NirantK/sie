@@ -18,7 +18,7 @@ profiles:
   default:
     max_batch_tokens: 16384
     compute_precision: null
-    adapter_path: sie_server.adapters.pytorch_embedding:PyTorchEmbeddingAdapter
+    adapter_path: sie_server.adapters.bert_flash:BertFlashAdapter
     adapter_options:
       loadtime: {}
       runtime:

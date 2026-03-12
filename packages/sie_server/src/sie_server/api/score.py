@@ -13,7 +13,7 @@ from sie_server.api.helpers import (
 )
 from sie_server.api.options import resolve_runtime_options
 from sie_server.api.serialization import MsgPackResponse
-from sie_server.api.validation import validate_machine_profile_header, validate_score_request
+from sie_server.api.validation import validate_machine_profile_header
 from sie_server.core.inference_output import ScoreOutput
 from sie_server.core.prepared import ScorePreparedItem
 from sie_server.core.timing import RequestTiming
@@ -22,6 +22,7 @@ from sie_server.observability.metrics import record_request
 from sie_server.observability.tracing import tracer
 from sie_server.types.inputs import Item
 from sie_server.types.openapi import ScoreResponseModel
+from sie_server.types.requests import ScoreRequest
 from sie_server.types.responses import ErrorCode, ScoreEntry, ScoreResponse
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ def _build_response(
     # Create (index, item_id, score) tuples
     scored_items = []
     for i, score in enumerate(scores):
-        item_id = items[i].get("id") if items[i].get("id") is not None else f"item-{i}"
+        item_id = items[i].id if items[i].id is not None else f"item-{i}"
         scored_items.append((i, item_id, score))
 
     # Sort by score descending
@@ -98,14 +99,14 @@ async def _score_via_worker(
     timing = RequestTiming()
 
     # Get query text length for cost calculation
-    query_text = query.get("text")
+    query_text = query.text
     query_len = len(query_text) if query_text else 0
 
     # Create PreparedItems for batching (cost = query + doc char count)
     timing.start_tokenization()  # Using tokenization timing for prep phase
     prepared_items = []
     for i, item in enumerate(items):
-        item_text = item.get("text")
+        item_text = item.text
         doc_len = len(item_text) if item_text else 0
         prepared = ScorePreparedItem(
             cost=query_len + doc_len,
@@ -193,13 +194,10 @@ async def score(
         if x_machine_profile:
             span.set_attribute("machine_profile", x_machine_profile)
 
-        # Parse request body (msgpack or JSON)
-        request = await RequestParser.parse(http_request, validate_score_request)
+        request = await RequestParser.parse(http_request, ScoreRequest)
 
         # Set span attributes from request
-        items = request["items"]
-        query = request["query"]
-        span.set_attribute("batch_size", len(items))
+        span.set_attribute("batch_size", len(request.items))
 
         registry = http_request.app.state.registry
         device = registry.device
@@ -231,12 +229,15 @@ async def score(
 
         # Resolve profile and merge runtime options (outside inference try/except
         # so ValueError from invalid profiles returns 400, not 500)
-        instruction = request.get("instruction")
-        options = resolve_runtime_options(config, request.get("options"), span)
+        instruction = request.instruction
+        options = resolve_runtime_options(config, request.options, span)
 
         # Request-level instruction takes precedence; fall back to profile instruction
         if instruction is None:
             instruction = options.get("instruction")
+
+        query = request.query
+        items = request.items
 
         # Score using worker with batching
         error_handler = InferenceErrorHandler(model, "score", span, ctx=ctx)
@@ -261,7 +262,7 @@ async def score(
             raise error_handler.handle_inference_error(e) from e
 
         # Build response
-        query_id = query.get("id")
+        query_id = query.id
         response = _build_response(model, query_id, items, scores)
 
         # Record successful request

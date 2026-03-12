@@ -22,24 +22,24 @@ class TestGLiRELAdapterExtractEntities:
 
     def test_extract_entities_with_metadata(self, adapter: GLiRELAdapter) -> None:
         """Entities are extracted from item metadata dict."""
-        item: Item = {"text": "test", "metadata": {"entities": [{"text": "Alice", "label": "PER"}]}}
+        item = Item(text="test", metadata={"entities": [{"text": "Alice", "label": "PER"}]})
         result = adapter._extract_entities(item)
         assert result == [{"text": "Alice", "label": "PER"}]
 
     def test_extract_entities_no_metadata(self, adapter: GLiRELAdapter) -> None:
         """Returns empty list when metadata is absent."""
-        item: Item = {"text": "test"}
+        item = Item(text="test")
         result = adapter._extract_entities(item)
         assert result == []
 
     def test_extract_entities_metadata_none(self, adapter: GLiRELAdapter) -> None:
         """Returns empty list when metadata is explicitly None."""
-        item: Item = {"text": "test", "metadata": None}  # type: ignore[typeddict-item]
+        item = Item(text="test", metadata=None)
         result = adapter._extract_entities(item)
         assert result == []
 
     def test_extract_entities_metadata_no_entities_key(self, adapter: GLiRELAdapter) -> None:
         """Returns empty list when metadata has no 'entities' key."""
-        item: Item = {"text": "test", "metadata": {"other": "data"}}
+        item = Item(text="test", metadata={"other": "data"})
         result = adapter._extract_entities(item)
         assert result == []

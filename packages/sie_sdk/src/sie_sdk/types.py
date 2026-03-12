@@ -98,17 +98,17 @@ class Item(TypedDict, total=False):
         {"text": "Description", "images": ["photo.jpg"]}
         {"images": [Image.open("photo.jpg")]}
 
-        # Pre-encoded multivector (for client-side MaxSim)
+        # Pre-encoded multivector (for use with sie_sdk.scoring.maxsim)
         {"multivector": np.array([[0.1, 0.2, ...], ...])}
     """
 
     id: str
     text: str
-    images: list[ImageInput | Image.Image | NDArray[Any] | bytes | str | Path]
+    images: Sequence[ImageInput | Image.Image | NDArray[Any] | bytes | str | Path]
     audio: AudioInput | bytes | str | Path
     video: VideoInput | bytes | str | Path
     metadata: dict[str, Any]
-    multivector: NDArray[np.float32]  # Pre-encoded multivector for client-side MaxSim
+    multivector: NDArray[np.float32]  # Pre-encoded multivector (for use with scoring.maxsim)
 
 
 class SparseResult(TypedDict):
@@ -604,7 +604,7 @@ class WorkerStatusMessage(TypedDict, total=False):
         machine_profile: Machine profile for routing. In K8s: from SIE_MACHINE_PROFILE env var
             (e.g., "l4-spot"). Standalone: detected GPU type (e.g., "l4").
         gpu_count: Number of GPUs on this worker.
-        bundle: Dependency bundle this worker is running (e.g., "default", "sglang").
+        bundle: Dependency bundle this worker is running (e.g., "default").
         loaded_models: List of model names currently loaded.
         server: Server metadata (version, uptime, etc.).
         gpus: Per-GPU metrics (includes gpu_type for each GPU).

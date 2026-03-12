@@ -287,18 +287,18 @@ class ColQwen2Adapter(ModelAdapter):
         )
 
     def _encode_single_item(self, item: Any, *, is_query: bool) -> np.ndarray:
-        has_text = item.get("text") is not None
-        has_images = item.get("images") is not None and len(item.get("images")) > 0
+        has_text = item.text is not None
+        has_images = item.images is not None and len(item.images) > 0
 
         if not has_text and not has_images:
             raise ValueError(_ERR_NO_INPUT)
 
         if is_query and has_text:
-            return self._encode_text(item["text"])
+            return self._encode_text(item.text)
         if has_images:
             return self._encode_images(self._load_images(item))
         if has_text:
-            return self._encode_text(item["text"])
+            return self._encode_text(item.text)
 
         raise ValueError(_ERR_NO_INPUT)
 
@@ -310,7 +310,7 @@ class ColQwen2Adapter(ModelAdapter):
         from PIL import Image
 
         pil_images = []
-        for img_input in item.get("images") or []:
+        for img_input in item.images or []:
             pil_img = Image.open(io.BytesIO(img_input["data"]))
             if pil_img.mode != "RGB":
                 pil_img = pil_img.convert("RGB")

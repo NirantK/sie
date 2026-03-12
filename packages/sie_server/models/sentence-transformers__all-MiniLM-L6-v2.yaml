@@ -18,9 +18,10 @@ profiles:
   default:
     max_batch_tokens: 16384
     compute_precision: null
-    adapter_path: sie_server.adapters.pytorch_embedding:PyTorchEmbeddingAdapter
+    adapter_path: sie_server.adapters.sentence_transformer:SentenceTransformerDenseAdapter
     adapter_options:
-      loadtime: {}
+      loadtime:
+        trust_remote_code: false
       runtime:
         pooling: mean
         normalize: true

@@ -544,10 +544,10 @@ class ColBERTModernBERTFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         prefix = self._query_prefix if is_query else self._doc_prefix
 
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             if instruction:
                 text = f"{instruction} {text}"

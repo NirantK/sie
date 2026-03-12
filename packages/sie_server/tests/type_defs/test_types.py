@@ -1,6 +1,7 @@
 """Tests for types used in the SIE Server API."""
 
 import numpy as np
+import pytest
 from sie_server.types.inputs import Item
 from sie_server.types.outputs import DenseVector, EncodeResult, MultiVector, SparseVector
 from sie_server.types.requests import (
@@ -9,6 +10,9 @@ from sie_server.types.requests import (
     ExtractParams,
     ExtractRequest,
     ScoreRequest,
+)
+from sie_server.types.requests import (
+    Item as RequestItem,
 )
 from sie_server.types.responses import (
     EncodeResponse,
@@ -24,33 +28,26 @@ from sie_server.types.responses import (
 
 
 class TestInputTypes:
-    """Tests for input types: Item (TypedDict)."""
+    """Tests for input types: Item (msgspec Struct)."""
 
     def test_item_text_only(self) -> None:
         """Item with just text."""
         item = Item(text="Hello world")
-        assert item["text"] == "Hello world"
-        assert item.get("id") is None
+        assert item.text == "Hello world"
+        assert item.id is None
 
     def test_item_with_id(self) -> None:
         """Item with ID."""
         item = Item(id="doc-1", text="Hello")
-        assert item["id"] == "doc-1"
+        assert item.id == "doc-1"
 
     def test_item_empty_allowed(self) -> None:
         """Empty Item is allowed (all fields optional for multimodal flexibility)."""
         item = Item()
-        assert item.get("text") is None
-        assert item.get("images") is None
-        assert item.get("audio") is None
-        assert item.get("video") is None
-
-    def test_item_extra_fields_allowed(self) -> None:
-        """Extra fields are allowed at runtime (TypedDict is just a dict)."""
-        # TypedDict doesn't validate at runtime - it's just type hints
-        # Extra fields are allowed (though type checkers would flag them)
-        item: Item = {"text": "Hello", "extra": "field"}  # type: ignore[typeddict-unknown-key]
-        assert item["text"] == "Hello"
+        assert item.text is None
+        assert item.images is None
+        assert item.audio is None
+        assert item.video is None
 
 
 class TestOutputTypes:
@@ -117,58 +114,56 @@ class TestOutputTypes:
 
 
 class TestRequestTypes:
-    """Tests for request types (TypedDicts)."""
+    """Tests for request Struct types (msgspec)."""
 
     def test_encode_request_minimal(self) -> None:
         """EncodeRequest with just items."""
-        req = EncodeRequest(items=[Item(text="Hello")])
-        assert len(req["items"]) == 1
-        assert req.get("params") is None
+        req = EncodeRequest(items=[RequestItem(text="Hello")])
+        assert len(req.items) == 1
+        assert req.params is None
 
     def test_encode_request_with_params(self) -> None:
         """EncodeRequest with parameters."""
         req = EncodeRequest(
-            items=[Item(text="Hello")],
+            items=[RequestItem(text="Hello")],
             params=EncodeParams(output_types=["dense", "sparse"], options={"is_query": True}),
         )
-        params = req.get("params")
-        assert params is not None
-        assert params["output_types"] == ["dense", "sparse"]
-        assert params.get("options") is not None
-        assert params["options"].get("is_query") is True
+        assert req.params is not None
+        assert req.params.output_types == ["dense", "sparse"]
+        assert req.params.options is not None
+        assert req.params.options.get("is_query") is True
 
-    def test_encode_request_empty_items_allowed_at_runtime(self) -> None:
-        """EncodeRequest with empty items is allowed at runtime (validation happens in API layer)."""
-        # TypedDict doesn't validate at runtime - validation is done by validate_encode_request
-        req = EncodeRequest(items=[])
-        assert len(req["items"]) == 0
+    def test_encode_request_empty_items_rejected(self) -> None:
+        """EncodeRequest with empty items raises ValidationError in __post_init__."""
+        import msgspec as _msgspec
+
+        with pytest.raises(_msgspec.ValidationError, match="items"):
+            EncodeRequest(items=[])
 
     def test_encode_params_defaults(self) -> None:
-        """EncodeParams fields are optional (TypedDict total=False)."""
+        """EncodeParams fields default to None."""
         params = EncodeParams()
-        # TypedDict doesn't provide defaults - they're just optional
-        assert params.get("output_types") is None
-        assert params.get("options") is None
-        assert params.get("instruction") is None
+        assert params.output_types is None
+        assert params.options is None
+        assert params.instruction is None
 
     def test_score_request(self) -> None:
         """ScoreRequest for reranking."""
         req = ScoreRequest(
-            query=Item(id="q1", text="What is Python?"),
-            items=[Item(id="d1", text="Python is a programming language")],
+            query=RequestItem(id="q1", text="What is Python?"),
+            items=[RequestItem(id="d1", text="Python is a programming language")],
         )
-        assert req["query"]["id"] == "q1"
-        assert len(req["items"]) == 1
+        assert req.query.id == "q1"
+        assert len(req.items) == 1
 
     def test_extract_request(self) -> None:
         """ExtractRequest for NER."""
         req = ExtractRequest(
-            items=[Item(text="John works at Anthropic")],
+            items=[RequestItem(text="John works at Anthropic")],
             params=ExtractParams(labels=["person", "organization"]),
         )
-        params = req.get("params")
-        assert params is not None
-        assert "person" in params["labels"]
+        assert req.params is not None
+        assert "person" in req.params.labels
 
 
 class TestResponseTypes:

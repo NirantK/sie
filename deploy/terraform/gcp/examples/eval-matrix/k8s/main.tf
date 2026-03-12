@@ -153,8 +153,8 @@ module "k8s" {
   install_keda = true
 
   # Deploy all bundles for matrix evaluation
-  # Creates worker pools: l4-spot-default, l4-spot-sglang, l4-spot-florence2
-  sie_bundles = ["default", "sglang", "florence2"]
+  # Creates worker pools: l4-spot-default
+  sie_bundles = ["default", "sglang"]
 
   # Minimal observability - just what KEDA needs
   # kube-prometheus-stack is always installed (KEDA dependency)

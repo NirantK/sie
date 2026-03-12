@@ -59,7 +59,6 @@ from sie_sdk.types import (
     OutputType,
     PoolInfo,
     PoolSpec,
-    ScoreEntry,
     ScoreResult,
     StatusMessage,
     WorkerInfo,
@@ -1027,7 +1026,7 @@ class SIEClient:
         for path in paths:
             ws_url = self._ws_url(path)
             try:
-                with connect(ws_url, extra_headers=headers) as ws:
+                with connect(ws_url, additional_headers=headers) as ws:
                     for message in ws:
                         if isinstance(message, bytes):
                             payload = message.decode("utf-8")
@@ -1223,16 +1222,16 @@ class SIEClient:
     ) -> ScoreResult:
         """Score items against a query using a reranker model.
 
-        Supports two modes:
-        1. **Server-side scoring** (default): Pass items with `text` key.
-           Server encodes and computes scores (cross-encoder or MaxSim).
-        2. **Client-side MaxSim**: Pass items with `multivector` key.
-           Scores computed locally without server round-trip (for ColBERT).
+        Sends query and items to the server, which encodes and computes scores
+        (cross-encoder or MaxSim depending on the model).
+
+        For client-side MaxSim with pre-encoded multivectors, use
+        :func:`sie_sdk.scoring.maxsim` directly.
 
         Args:
             model: Model name to use for scoring (must support reranking).
-            query: Query item with `text` or `multivector` key.
-            items: List of items with `text` or `multivector` key.
+            query: Query item (e.g., ``{"text": "query text"}``).
+            items: List of items to score against the query.
             instruction: Optional instruction for instruction-tuned models.
             options: Runtime options dict. Can include "profile" to select a named profile.
             gpu: Target GPU type (e.g., "l4", "a100-80gb"). Routes request to workers
@@ -1252,62 +1251,14 @@ class SIEClient:
             SIEConnectionError: If unable to connect to the server.
             ProvisioningError: If wait_for_capacity=False and server returns 202,
                 or if provisioning times out.
-            ValueError: If mixing text and multivector items.
 
-        Example (server-side):
+        Example:
             >>> result = client.score(
             ...     "bge-reranker-v2",
             ...     query={"text": "What is machine learning?"},
             ...     items=[{"text": "ML is AI..."}, {"text": "Python is..."}],
             ... )
-
-        Example (client-side MaxSim with pre-encoded multivectors):
-            >>> # Encode once
-            >>> query_result = client.encode("jina-colbert-v2", {"text": "query"}, output_types=["multivector"])
-            >>> # Score with pre-encoded vectors (no server call)
-            >>> result = client.score(
-            ...     "jina-colbert-v2",
-            ...     query={"multivector": query_result["multivector"]},
-            ...     items=[{"multivector": doc_vec} for doc_vec in stored_vectors],
-            ... )
         """
-        # Check if this is client-side MaxSim (pre-encoded multivectors)
-        query_has_multivector = "multivector" in query
-        items_have_multivector = all("multivector" in item for item in items)
-
-        if query_has_multivector and items_have_multivector:
-            # Client-side MaxSim scoring (no server call, gpu not applicable)
-            return self._score_client_side_maxsim(model, query, items)
-        if query_has_multivector or items_have_multivector:
-            # Mixed mode not supported
-            msg = "Cannot mix text and multivector items. Either all items must have 'multivector' key or none."
-            raise ValueError(msg)
-
-        # Server-side scoring
-        return self._score_server_side(
-            model,
-            query,
-            items,
-            instruction=instruction,
-            options=options,
-            gpu=gpu,
-            wait_for_capacity=wait_for_capacity,
-            provision_timeout_s=provision_timeout_s,
-        )
-
-    def _score_server_side(
-        self,
-        model: str,
-        query: Item,
-        items: list[Item],
-        *,
-        instruction: str | None = None,
-        options: dict[str, Any] | None = None,
-        gpu: str | None = None,
-        wait_for_capacity: bool = False,
-        provision_timeout_s: float | None = None,
-    ) -> ScoreResult:
-        """Score items via server (cross-encoder or server-side MaxSim)."""
         # Resolve defaults and pool
         pool_name, resolved_gpu = self._resolve_pool_and_gpu(gpu)
         resolved_options = self._resolve_options(options)
@@ -1463,45 +1414,6 @@ class SIEClient:
 
         # Build ScoreResult
         return parse_score_result(response_data)
-
-    def _score_client_side_maxsim(
-        self,
-        model: str,
-        query: Item,
-        items: list[Item],
-    ) -> ScoreResult:
-        """Compute MaxSim scores locally using pre-encoded multivectors."""
-        from sie_sdk.scoring import maxsim
-
-        # Extract multivectors
-        query_mv = query["multivector"]
-        doc_mvs = [item["multivector"] for item in items]
-
-        # Compute MaxSim scores
-        raw_scores = maxsim(query_mv, doc_mvs)
-
-        # Build scored items with IDs
-        scored_items: list[tuple[str, float]] = []
-        for i, score in enumerate(raw_scores):
-            item_id = items[i].get("id", f"item-{i}")
-            scored_items.append((item_id, score))
-
-        # Sort by score descending
-        scored_items.sort(key=lambda x: x[1], reverse=True)
-
-        # Build ScoreResult
-        scores = [
-            ScoreEntry(item_id=item_id, score=score, rank=rank) for rank, (item_id, score) in enumerate(scored_items)
-        ]
-
-        result: ScoreResult = {
-            "model": model,
-            "scores": scores,
-        }
-        if query.get("id") is not None:
-            result["query_id"] = query["id"]
-
-        return result
 
     # Use overload for proper type hints when single item vs list
     @overload

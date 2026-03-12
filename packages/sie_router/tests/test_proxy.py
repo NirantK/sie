@@ -23,6 +23,7 @@ from sie_router.proxy import (
     _make_provisioning_response,
     _make_unconfigured_gpu_response,
     _mask_token,
+    _resolve_machine_profile,
     audit_logger,
     router,
 )
@@ -164,6 +165,38 @@ class TestMakeUnconfiguredGpuResponse:
         assert body["status"] == "gpu_not_configured"
 
 
+class TestResolveMachineProfile:
+    """Tests for _resolve_machine_profile."""
+
+    def test_bare_gpu_resolves_to_spot(self) -> None:
+        """l4 → l4-spot when only l4-spot is configured."""
+        assert _resolve_machine_profile("l4", ["l4-spot"]) == "l4-spot"
+
+    def test_already_spot_stays_spot(self) -> None:
+        """l4-spot → l4-spot (no change)."""
+        assert _resolve_machine_profile("l4-spot", ["l4-spot"]) == "l4-spot"
+
+    def test_bare_gpu_kept_when_no_spot_variant(self) -> None:
+        """l4 → l4 when no l4-spot exists."""
+        assert _resolve_machine_profile("l4", ["l4", "a100-40gb"]) == "l4"
+
+    def test_empty_configured_list(self) -> None:
+        """Empty configured list → GPU unchanged."""
+        assert _resolve_machine_profile("l4", []) == "l4"
+
+    def test_case_insensitive(self) -> None:
+        """Resolution is case-insensitive."""
+        assert _resolve_machine_profile("L4", ["l4-spot"]) == "l4-spot"
+
+    def test_preserves_configured_case(self) -> None:
+        """Returned value preserves the case of the configured entry."""
+        assert _resolve_machine_profile("l4", ["L4-Spot"]) == "L4-Spot"
+
+    def test_bare_gpu_not_resolved_when_both_exist(self) -> None:
+        """l4 → l4 (exact match) when both l4 and l4-spot are configured."""
+        assert _resolve_machine_profile("l4", ["l4", "l4-spot"]) == "l4"
+
+
 # =============================================================================
 # Proxy routing tests - no workers available scenarios
 # =============================================================================
@@ -234,6 +267,30 @@ class TestProxyNoWorkers:
         # The machine_profile is extracted from pool spec (l4 in this case)
         mock_demand.assert_called_once_with("l4", "default", "eval-l4-0")
 
+    def test_pool_derived_gpu_resolved_to_spot(
+        self, client: TestClient, registry: MagicMock, pool_manager: MagicMock
+    ) -> None:
+        """Pool spec has bare 'l4' but only 'l4-spot' configured → demand recorded as l4-spot."""
+        registry.select_worker.return_value = None
+
+        pool = Pool(
+            spec=PoolSpec(name="eval-l4-0", gpus={"l4": 1}),
+            status=PoolStatus(state=PoolState.PENDING),
+        )
+        pool_manager.get_pool.return_value = pool
+
+        with patch("sie_router.proxy.record_pending_demand") as mock_demand:
+            with patch("sie_router.proxy.CONFIGURED_GPU_TYPES", ["l4-spot"]):
+                response = client.post(
+                    "/v1/encode/test-model",
+                    headers={"X-SIE-Pool": "eval-l4-0"},
+                    json={"text": "hello"},
+                )
+
+        assert response.status_code == 202
+        assert response.json()["gpu"] == "l4-spot"
+        mock_demand.assert_called_once_with("l4-spot", "default", "eval-l4-0")
+
     def test_no_workers_pool_no_gpu_spec_returns_503(
         self, client: TestClient, registry: MagicMock, pool_manager: MagicMock
     ) -> None:
@@ -254,6 +311,22 @@ class TestProxyNoWorkers:
         )
 
         assert response.status_code == 503
+
+    def test_bare_gpu_resolved_to_spot_in_demand(self, client: TestClient, registry: MagicMock) -> None:
+        """l4 header resolved to l4-spot when only l4-spot is configured → 202 with l4-spot demand."""
+        registry.select_worker.return_value = None
+
+        with patch("sie_router.proxy.record_pending_demand") as mock_demand:
+            with patch("sie_router.proxy.CONFIGURED_GPU_TYPES", ["l4-spot"]):
+                response = client.post(
+                    "/v1/encode/test-model",
+                    headers={"X-SIE-MACHINE-PROFILE": "l4"},
+                    json={"text": "hello"},
+                )
+
+        assert response.status_code == 202
+        assert response.json()["gpu"] == "l4-spot"
+        mock_demand.assert_called_once_with("l4-spot", "default", "default")
 
     def test_unconfigured_gpu_returns_503(self, client: TestClient, registry: MagicMock) -> None:
         """Request for unconfigured GPU type → 503 with specific error."""

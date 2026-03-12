@@ -72,7 +72,7 @@ class TextPreprocessor:
         del instruction, task  # Unused - only needed for vision models
 
         # Extract texts
-        texts = [item.get("text") or "" for item in items]
+        texts = [item.text or "" for item in items]
 
         # Build tokenizer kwargs
         kwargs: dict[str, Any] = {
@@ -237,7 +237,7 @@ class CharCountPreprocessor:
         return PreparedBatch(items=prepared_items, total_cost=total_cost)
 
     def _get_text_safe(self, item: Item) -> str:
-        raw = item.get("text")
+        raw = item.text
         if raw is None:
             text = ""
         elif not isinstance(raw, str):

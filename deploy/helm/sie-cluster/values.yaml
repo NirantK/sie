@@ -76,8 +76,8 @@ router:
     # -- Bundle configs to mount (key: ConfigMap key, file: target filename)
     bundles: []
     # Example:
-    #   - key: default.toml
-    #     file: default.toml
+    #   - key: default.yaml
+    #     file: default.yaml
     # -- Model configs to mount (key: ConfigMap key, mounted as models/<key>.yaml)
     models: []
     # Example:
@@ -162,7 +162,7 @@ workers:
     # -- Models to preload on startup (empty = lazy loading)
     preloadModels: []
 
-    # -- Bundle to use (default, florence2, sglang)
+    # -- Bundle to use (default)
     bundle: default
 
     # -- Runtime class for workers (e.g., "nvidia" to enable GPU runtime)
@@ -290,10 +290,10 @@ workers:
       resources:
         requests:
           cpu: "2"
-          memory: "4Gi"
+          memory: "6Gi"
         limits:
           cpu: "4"
-          memory: "8Gi"
+          memory: "12Gi"
       tolerations: []
 
 # -- Autoscaling configuration (requires KEDA)

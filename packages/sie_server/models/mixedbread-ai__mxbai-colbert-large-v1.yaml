@@ -29,6 +29,9 @@ profiles:
         normalize: true
         query_max_length: 32
         skip_special_tokens: false
+        query_expansion: false
+        query_prefix: '[Q] '
+        doc_prefix: '[D] '
       runtime:
         muvera: null
   muvera:

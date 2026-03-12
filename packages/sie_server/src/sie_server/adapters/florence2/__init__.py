@@ -436,7 +436,7 @@ class Florence2Adapter(ModelAdapter):
         from PIL import Image as PILImage
 
         # Validate input
-        images = item.get("images")
+        images = item.images
         if not images or len(images) == 0:
             raise ValueError(_ERR_NO_IMAGES)
 

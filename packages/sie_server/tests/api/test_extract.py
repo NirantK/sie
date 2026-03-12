@@ -348,6 +348,51 @@ class TestExtractEndpoint:
         )
         assert response.status_code == 400  # Custom validation error (not Pydantic)
 
+    def test_extract_non_dict_items_rejected(self, client: TestClient) -> None:
+        """Non-dict items return 400, not 500."""
+        response = client.post(
+            "/v1/extract/test-extractor",
+            json={
+                "items": ["just a string"],
+                "params": {"labels": ["entity"]},
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `object`, got `str` - at `$.items[0]`"
+
+    def test_extract_non_string_text_rejected(self, client: TestClient) -> None:
+        """Item with non-string 'text' returns 400, not 500."""
+        response = client.post(
+            "/v1/extract/test-extractor",
+            json={
+                "items": [{"text": 123}],
+                "params": {"labels": ["entity"]},
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `str | null`, got `int` - at `$.items[0].text`"
+
+    def test_extract_non_list_images_rejected(self, client: TestClient) -> None:
+        """Item with non-list 'images' returns 400, not 500."""
+        response = client.post(
+            "/v1/extract/test-extractor",
+            json={
+                "items": [{"images": "not-a-list"}],
+                "params": {"labels": ["entity"]},
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `array | null`, got `str` - at `$.items[0].images`"
+
 
 class TestExtractEntityResults:
     """Tests for entity extraction result format."""

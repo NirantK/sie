@@ -84,16 +84,3 @@ def _convert_for_json(d: dict[str, Any]) -> dict[str, Any]:
         else:
             result[k] = v
     return result
-
-
-def deserialize_msgpack(data: bytes) -> dict[str, Any]:
-    """Deserialize msgpack data with numpy support.
-
-    Args:
-        data: msgpack bytes.
-
-    Returns:
-        Deserialized dict with numpy arrays restored.
-    """
-    result: dict[str, Any] = msgpack.unpackb(data, raw=False)
-    return result

@@ -154,12 +154,18 @@ def collect_bundle_deps(
             logger.debug("Excluding CUDA-only package: %s", pkg)
             continue
 
-        # Handle dict-style deps (e.g., flash-attn with url+marker)
+        # Handle dict-style deps (e.g., flash-attn with url+marker, or sglang with version+marker)
         if isinstance(constraint, dict):
             url = constraint.get("url", "")
             marker = constraint.get("marker", "")
+            version = constraint.get("version", "")
             if url:
                 dep_str = f"{pkg} @ {url}"
+                if marker:
+                    dep_str += f" ; {marker}"
+                requirements.append(dep_str)
+            elif version:
+                dep_str = f"{pkg}{version}"
                 if marker:
                     dep_str += f" ; {marker}"
                 requirements.append(dep_str)

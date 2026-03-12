@@ -149,10 +149,10 @@ class GLiClassAdapter(ModelAdapter):
         Raises:
             ValueError: If item has no text.
         """
-        if not item["text"]:
+        if not item.text:
             msg = "Item must have text for classification"
             raise ValueError(msg)
-        return item["text"]
+        return item.text
 
     def extract(
         self,

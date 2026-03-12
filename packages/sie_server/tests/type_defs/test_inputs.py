@@ -5,6 +5,7 @@ for TypedDict types (not supported in Python 3.12+).
 """
 
 from sie_server.types.inputs import (
+    Item,
     is_audio_input,
     is_image_input,
     is_item,
@@ -123,8 +124,13 @@ class TestIsItem:
             }
         )
 
-    def test_invalid_not_dict(self) -> None:
-        """Must be a dict."""
+    def test_valid_item_struct(self) -> None:
+        """Item Struct instances are valid."""
+        assert is_item(Item(text="hello"))
+        assert is_item(Item())
+
+    def test_invalid_not_dict_or_struct(self) -> None:
+        """Must be a dict or Item Struct."""
         assert not is_item(None)
         assert not is_item("string")
         assert not is_item([])

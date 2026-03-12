@@ -156,7 +156,7 @@ class PoolSpec:
 
     name: str
     gpus: dict[str, int] = field(default_factory=dict)  # e.g., {"l4": 2, "a100-40gb": 1}
-    bundle: str | None = None  # Optional bundle filter (e.g., "default", "sglang")
+    bundle: str | None = None  # Optional bundle filter (e.g., "default")
 
 
 @dataclass

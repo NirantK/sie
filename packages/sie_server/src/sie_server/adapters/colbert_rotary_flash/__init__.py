@@ -721,10 +721,10 @@ class ColBERTRotaryFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         use_text_prefix = prefix and prefix_id is None
 
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             if instruction:
                 text = f"{instruction} {text}"

@@ -232,12 +232,12 @@ class NemoColEmbedPreprocessor:
         total_cost = 0
 
         for i, item in enumerate(items):
-            if not item.get("images"):
+            if not item.images:
                 logger.warning("NemoColEmbedPreprocessor: item %d has no images", i)
                 continue
 
             # Load image from bytes
-            img_input = item["images"][0]
+            img_input = item.images[0]
             pil_img = PILImage.open(io.BytesIO(img_input["data"]))
             original_size = pil_img.size
 
@@ -438,12 +438,12 @@ class Florence2Preprocessor:
         """
         from PIL import Image as PILImage
 
-        if not item.get("images"):
+        if not item.images:
             logger.warning("Florence2Preprocessor: item %d has no images", index)
             return None
 
         # Load image from bytes - PIL releases GIL during decode
-        img_input = item["images"][0]
+        img_input = item.images[0]
         pil_img = PILImage.open(io.BytesIO(img_input["data"]))
         original_size = (pil_img.width, pil_img.height)
 
@@ -633,12 +633,12 @@ class DonutPreprocessor:
         """
         from PIL import Image as PILImage
 
-        if not item.get("images"):
+        if not item.images:
             logger.warning("DonutPreprocessor: item %d has no images", index)
             return None
 
         # Load image from bytes - PIL releases GIL during decode
-        img_input = item["images"][0]
+        img_input = item.images[0]
         pil_img = PILImage.open(io.BytesIO(img_input["data"]))
         original_size = (pil_img.width, pil_img.height)
 
@@ -833,11 +833,11 @@ class DetectionPreprocessor:
 
         from sie_server.types.inputs import is_image_input
 
-        if not item.get("images"):
+        if not item.images:
             logger.warning("DetectionPreprocessor: item %d has no images", index)
             return None
 
-        img = item["images"][0]
+        img = item.images[0]
         if not is_image_input(img):
             logger.warning("DetectionPreprocessor: item %d has non-ImageInput image", index)
             return None

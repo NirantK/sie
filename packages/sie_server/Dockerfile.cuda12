@@ -18,7 +18,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install Python 3.12 and build tools
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     gnupg \
@@ -109,7 +108,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install Python 3.12 runtime + gcc (needed for triton kernel compilation)
 # libnuma1 is required by sgl_kernel (SGLang bundle) - without it, imports fail with misleading SM arch errors
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     gnupg \

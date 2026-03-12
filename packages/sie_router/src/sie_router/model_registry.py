@@ -210,7 +210,7 @@ class ModelRegistry:
 
         Args:
             model: Model name (e.g., "BAAI/bge-m3").
-            bundle_override: Optional explicit bundle (e.g., "sglang").
+            bundle_override: Optional explicit bundle (e.g., "default").
 
         Returns:
             Bundle name to use.
@@ -328,7 +328,7 @@ def parse_model_spec(model_spec: str) -> tuple[str | None, str]:
 
     Examples:
         "BAAI/bge-m3" → (None, "BAAI/bge-m3")
-        "sglang:/BAAI/bge-m3" → ("sglang", "BAAI/bge-m3")
+        "default:/BAAI/bge-m3" → ("default", "BAAI/bge-m3")
         "BAAI/bge-m3:variant" → (None, "BAAI/bge-m3:variant")
 
     Args:

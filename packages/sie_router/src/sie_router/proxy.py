@@ -160,6 +160,28 @@ def _filter_headers(headers: dict[str, str], *, strip_content_length: bool = Fal
     return {k: v for k, v in headers.items() if k.lower() not in excluded}
 
 
+def _resolve_machine_profile(gpu: str, configured_gpu_types: list[str]) -> str:
+    """Resolve a bare GPU type to its spot variant if one is configured.
+
+    Users may send ``X-SIE-MACHINE-PROFILE: l4`` but the cluster only provisions
+    spot workers (``l4-spot``).  This function transparently maps the bare name
+    to the ``-spot`` variant when:
+      1. The bare name itself is **not** in the configured list, **and**
+      2. A ``<gpu>-spot`` entry **is** in the configured list.
+
+    All comparisons are case-insensitive; the returned value preserves the case
+    of the configured entry so that downstream metrics/KEDA labels match exactly.
+    """
+    cfg_lower = {g.lower(): g for g in configured_gpu_types}
+    if gpu.lower() in cfg_lower:
+        return cfg_lower[gpu.lower()]
+    spot_key = f"{gpu.lower()}-spot"
+    if spot_key in cfg_lower:
+        logger.info("Resolved machine_profile '%s' → '%s'", gpu, cfg_lower[spot_key])
+        return cfg_lower[spot_key]
+    return gpu
+
+
 def _make_provisioning_response(gpu: str) -> JSONResponse:
     """Create a 202 Accepted response for provisioning.
 
@@ -281,7 +303,7 @@ async def _proxy_request(
     pool_manager: PoolManager | None = getattr(request.app.state, "pool_manager", None)
     model_registry: ModelRegistry | None = getattr(request.app.state, "model_registry", None)
 
-    # Parse bundle from model spec (e.g., "sglang:/org/model" -> bundle="sglang", model="org/model")
+    # Parse bundle from model spec (e.g., "default:/org/model" -> bundle="default", model="org/model")
     bundle_override, model_name = parse_model_spec(model)
 
     # Resolve bundle using ModelRegistry (priority-based or explicit override)
@@ -336,6 +358,11 @@ async def _proxy_request(
         if parsed_pool:
             pool_name = parsed_pool
             gpu = parsed_gpu
+
+    # Resolve bare GPU types to spot variants (e.g., "l4" → "l4-spot")
+    # when the spot variant exists in configured GPU types.
+    if gpu and CONFIGURED_GPU_TYPES:
+        gpu = _resolve_machine_profile(gpu, CONFIGURED_GPU_TYPES)
 
     # Use default pool if none specified and pool manager is available
     effective_pool = pool_name or DEFAULT_POOL_NAME
@@ -396,6 +423,8 @@ async def _proxy_request(
             if pool and pool.spec.gpus:
                 # Use the first GPU type from the pool spec
                 demand_gpu = next(iter(pool.spec.gpus.keys()))
+                if CONFIGURED_GPU_TYPES:
+                    demand_gpu = _resolve_machine_profile(demand_gpu, CONFIGURED_GPU_TYPES)
                 logger.debug("Extracted GPU '%s' from pool '%s' spec", demand_gpu, pool_name)
 
         if demand_gpu:

@@ -183,9 +183,9 @@ class NLIClassificationFlashAdapter(ModelAdapter):
 
     def _extract_text(self, item: Item) -> str:
         """Extract text from an item."""
-        if not item["text"]:
+        if not item.text:
             raise ValueError(_ERR_REQUIRES_TEXT)
-        return item["text"]
+        return item.text
 
     def extract(
         self,

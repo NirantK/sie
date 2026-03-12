@@ -18,6 +18,7 @@ See: https://github.com/Dao-AILab/flash-attention
 from __future__ import annotations
 
 import gc
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -95,6 +96,7 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         query_template: str | None = None,
         doc_template: str | None = None,
         uses_legacy_transformers_cache: bool = False,
+        dense_projection_path: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the adapter.
@@ -111,6 +113,8 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
             uses_legacy_transformers_cache: If True, disable the KV cache after
                 loading by setting model.config.use_cache = False. Required for
                 models that use the legacy transformers cache API (pre-4.54).
+            dense_projection_path: Optional subfolder in the HuggingFace repo
+                containing a dense projection layer (config.json + weights).
         """
         _ = kwargs
         self._model_name_or_path = str(model_name_or_path)
@@ -121,11 +125,13 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._query_template = query_template
         self._doc_template = doc_template
         self._uses_legacy_transformers_cache = uses_legacy_transformers_cache
+        self._dense_projection_path = dense_projection_path
 
         self._model: Any = None
         self._tokenizer: PreTrainedTokenizerFast | None = None
         self._device: str | None = None
         self._dense_dim: int | None = None
+        self._dense_projection: torch.nn.Linear | None = None
 
     @classmethod
     def create_for_device(cls, device: str, **kwargs: Any) -> ModelAdapter:
@@ -210,7 +216,11 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._model.eval()
 
         self._dense_dim = self._model.config.hidden_size
-        logger.debug("Qwen2 model hidden_size: %d", self._dense_dim)
+
+        if self._dense_projection_path:
+            self._load_dense_projection(device)
+
+        logger.debug("Qwen2 model dense_dim: %d", self._dense_dim)
 
     def _resolve_dtype(self) -> torch.dtype:
         """Resolve compute dtype."""
@@ -221,6 +231,53 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         }
         return dtype_map.get(self._compute_precision, torch.bfloat16)
 
+    def _load_dense_projection(self, device: str) -> None:
+        """Load the sentence-transformers dense projection layer from HuggingFace."""
+        import safetensors.torch
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.errors import EntryNotFoundError
+
+        config_file = hf_hub_download(
+            self._model_name_or_path,
+            f"{self._dense_projection_path}/config.json",
+        )
+
+        with open(config_file) as f:
+            proj_config = json.load(f)
+
+        in_features = proj_config["in_features"]
+        out_features = proj_config["out_features"]
+        bias = proj_config.get("bias", True)
+
+        self._dense_projection = torch.nn.Linear(in_features, out_features, bias=bias)
+
+        try:
+            weights_path = hf_hub_download(
+                self._model_name_or_path,
+                f"{self._dense_projection_path}/model.safetensors",
+            )
+            state_dict = safetensors.torch.load_file(weights_path)
+        except (EntryNotFoundError, OSError):
+            weights_path = hf_hub_download(
+                self._model_name_or_path,
+                f"{self._dense_projection_path}/pytorch_model.bin",
+            )
+            state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+
+        if any(k.startswith("linear.") for k in state_dict):
+            state_dict = {k.removeprefix("linear."): v for k, v in state_dict.items()}
+        self._dense_projection.load_state_dict(state_dict)
+        self._dense_projection.to(device=device, dtype=self._resolve_dtype())
+        self._dense_projection.eval()
+        self._dense_dim = out_features
+
+        logger.info(
+            "Loaded dense projection %s: %d -> %d",
+            self._dense_projection_path,
+            in_features,
+            out_features,
+        )
+
     def unload(self) -> None:
         """Unload the model and free resources."""
         device = self._device
@@ -228,6 +285,10 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         if self._model is not None:
             del self._model
             self._model = None
+
+        if self._dense_projection is not None:
+            del self._dense_projection
+            self._dense_projection = None
 
         if self._tokenizer is not None:
             del self._tokenizer
@@ -366,16 +427,33 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         """
         dtype = self._resolve_dtype()
 
-        # Ensure the cache is large enough by calling forward with seq_len
-        # Qwen2RotaryEmbedding.forward(x, seq_len) where x provides dtype/device
+        # Try new-style API first (transformers >= 4.45, Qwen3):
+        # rotary_emb(x, position_ids) -> (cos, sin)
+        if not hasattr(rotary_emb, "cos_cached"):
+            dummy_x = torch.zeros(
+                1,
+                1,
+                1,
+                getattr(
+                    self._model.config,
+                    "head_dim",
+                    self._model.config.hidden_size // self._model.config.num_attention_heads,
+                ),
+                device=self._device,
+                dtype=dtype,
+            )
+            pos_ids = position_ids.unsqueeze(0)  # [1, total_tokens]
+            cos, sin = rotary_emb(dummy_x, pos_ids)
+            cos = cos.squeeze(0).to(dtype)  # [total_tokens, head_dim]
+            sin = sin.squeeze(0).to(dtype)  # [total_tokens, head_dim]
+            return cos, sin
+
+        # Old-style API (transformers < 4.45, Qwen2):
+        # rotary_emb(x, seq_len) populates cos_cached/sin_cached
         dummy_x = torch.zeros(1, 1, max_seqlen, 1, device=self._device, dtype=dtype)
         _ = rotary_emb(dummy_x, seq_len=max_seqlen)
-
-        # Now index directly into the cached cos/sin tensors
-        # cos_cached and sin_cached are [max_seq_len_cached, head_dim]
         cos = rotary_emb.cos_cached[position_ids].to(dtype)  # [total_tokens, head_dim]
         sin = rotary_emb.sin_cached[position_ids].to(dtype)  # [total_tokens, head_dim]
-
         return cos, sin
 
     def _run_transformer_flash(
@@ -398,11 +476,14 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         num_heads = self._model.config.num_attention_heads
         num_kv_heads = self._model.config.num_key_value_heads
         hidden_size = self._model.config.hidden_size
-        head_dim = hidden_size // num_heads
+        head_dim = getattr(self._model.config, "head_dim", hidden_size // num_heads)
         softmax_scale = 1.0 / (head_dim**0.5)
 
-        # Precompute RoPE once using first layer's rotary_emb (all layers share same config)
-        rotary_emb = self._model.layers[0].self_attn.rotary_emb
+        # Precompute RoPE once (Qwen3 stores rotary_emb at model level, Qwen2 per-layer)
+        if hasattr(self._model, "rotary_emb"):
+            rotary_emb = self._model.rotary_emb
+        else:
+            rotary_emb = self._model.layers[0].self_attn.rotary_emb
         cos, sin = self._compute_rope(rotary_emb, position_ids, max_seqlen)
 
         for layer in self._model.layers:
@@ -436,7 +517,7 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
                 causal=False,  # Bi-directional for embeddings
                 softmax_scale=softmax_scale,
             )
-            attn_out = attn_out.reshape(total_tokens, hidden_size)
+            attn_out = attn_out.reshape(total_tokens, num_heads * head_dim)
 
             # Output projection
             attn_out = attn.o_proj(attn_out)
@@ -492,6 +573,9 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
                 mean_embeddings.append(hidden[start:end].mean(dim=0))
             pooled = torch.stack(mean_embeddings)
 
+        if self._dense_projection is not None:
+            pooled = self._dense_projection(pooled)
+
         if normalize:
             pooled = functional.normalize(pooled, p=2, dim=-1)
 
@@ -518,10 +602,10 @@ class Qwen2FlashAdapter(PEFTLoRAMixin, ModelAdapter):
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             # Apply template based on query/document mode
             template = query_template if is_query else doc_template
