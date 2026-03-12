@@ -24,5 +24,6 @@ profiles:
       runtime:
         pooling: mean
         normalize: true
-        query_template: 'query: {text}'
-        doc_template: 'passage: {text}'
+        query_template: 'Instruct: {instruction}\nQuery: {text}'
+        instruction: 'Given a web search query, retrieve relevant passages that answer the query'
+        doc_template: '{text}'

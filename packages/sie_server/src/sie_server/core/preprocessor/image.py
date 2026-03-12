@@ -72,12 +72,12 @@ class ImagePreprocessor:
         total_cost = 0
 
         for i, item in enumerate(items):
-            if not item.get("images"):
+            if not item.images:
                 # Skip items without images (they may be text-only)
                 continue
 
             # Load first image from bytes
-            img_input = item["images"][0]
+            img_input = item.images[0]
             pil_img = PILImage.open(io.BytesIO(img_input["data"]))
             original_size = pil_img.size
 

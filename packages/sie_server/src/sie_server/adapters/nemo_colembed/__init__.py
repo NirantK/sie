@@ -329,9 +329,9 @@ class NemoColEmbedAdapter(ModelAdapter):
         # Item is a TypedDict (dict) - no instance check needed
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_NO_INPUT)
-            texts.append(item["text"])
+            texts.append(item.text)
 
         # Use model's forward_queries method
         with torch.inference_mode():
@@ -374,11 +374,11 @@ class NemoColEmbedAdapter(ModelAdapter):
         # Item is a TypedDict (dict) - no instance check needed
         pil_images = []
         for item in items:
-            if not item.get("images") or len(item.get("images")) == 0:
+            if not item.images or len(item.images) == 0:
                 raise ValueError(_ERR_NO_INPUT)
 
             # Load first image from each item (ImageInput is also a TypedDict)
-            img_bytes = item.get("images")[0]["data"]
+            img_bytes = item.images[0]["data"]
             pil_img = Image.open(io.BytesIO(img_bytes))
             if pil_img.mode != "RGB":
                 pil_img = pil_img.convert("RGB")

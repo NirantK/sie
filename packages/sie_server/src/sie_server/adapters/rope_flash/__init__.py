@@ -126,6 +126,7 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._tokenizer: PreTrainedTokenizerFast | None = None
         self._device: str | None = None
         self._dense_dim: int | None = None
+        self._rope_dummy: torch.Tensor | None = None
 
     @classmethod
     def create_for_device(cls, device: str, **kwargs: Any) -> ModelAdapter:
@@ -237,6 +238,7 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         self._device = None
         self._dense_dim = None
+        self._rope_dummy = None
 
         gc.collect()
         if device and device.startswith("cuda"):
@@ -284,29 +286,29 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             doc_template=doc_template,
         )
 
-        # Tokenize each sequence individually (no padding)
-        encodings = [
-            self._tokenizer(
-                text,
-                max_length=self._max_seq_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            for text in texts
-        ]
+        # Tokenize all sequences in a single batched call (no padding)
+        batch_encoding = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=False,
+            return_length=True,
+            return_tensors=None,  # Return lists, not tensors -- we pack ourselves
+        )
 
         # Build packed representation
-        seq_lengths = [enc["input_ids"].shape[1] for enc in encodings]
+        seq_lengths = batch_encoding.get("length") or [len(ids) for ids in batch_encoding["input_ids"]]
         total_tokens = sum(seq_lengths)
         max_seqlen = max(seq_lengths)
 
-        # Pack input_ids
-        input_ids_packed = torch.cat([enc["input_ids"].squeeze(0) for enc in encodings]).to(self._device)
+        # Pack input_ids into a single 1-D tensor
+        input_ids_packed = torch.cat(
+            [torch.as_tensor(ids, dtype=torch.long) for ids in batch_encoding["input_ids"]],
+        ).to(self._device)
 
-        # Build cu_seqlens (cumulative sequence lengths)
+        # Build cu_seqlens using cumsum (no Python loop)
         cu_seqlens = torch.zeros(len(texts) + 1, dtype=torch.int32, device=self._device)
-        for i, length in enumerate(seq_lengths):
-            cu_seqlens[i + 1] = cu_seqlens[i] + length
+        cu_seqlens[1:] = torch.cumsum(torch.tensor(seq_lengths, dtype=torch.int32, device=self._device), dim=0)
 
         with torch.inference_mode():
             # Build position IDs for RoPE
@@ -344,11 +346,13 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         Each sequence has positions starting from 0.
         """
-        pos_list = []
-        for i in range(num_seqs):
-            seq_len = cu_seqlens[i + 1].item() - cu_seqlens[i].item()
-            pos_list.append(torch.arange(0, seq_len, device=self._device))
-        return torch.cat(pos_list)
+        total_tokens = cu_seqlens[-1].item()
+        positions = torch.arange(total_tokens, device=self._device)
+        seq_starts = torch.repeat_interleave(
+            cu_seqlens[:-1],
+            cu_seqlens[1:] - cu_seqlens[:-1],
+        )
+        return positions - seq_starts
 
     def _compute_rope(
         self,
@@ -361,11 +365,12 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             cos, sin tensors of shape [total_tokens, head_dim].
         """
         rotary_emb = self._model.embeddings.rotary_emb
-
-        # Ensure cache is large enough
         dtype = self._resolve_dtype()
-        dummy = torch.zeros(1, 1, max_seqlen, 1, device=self._device, dtype=dtype)
-        cos_cached, sin_cached = rotary_emb(dummy, seq_len=max_seqlen)
+
+        # Reuse a cached dummy tensor instead of allocating one every call
+        if self._rope_dummy is None:
+            self._rope_dummy = torch.zeros(1, 1, 1, 1, device=self._device, dtype=dtype)
+        cos_cached, sin_cached = rotary_emb(self._rope_dummy, seq_len=max_seqlen)
 
         # Index into cached values using position IDs
         cos = cos_cached[position_ids]  # [total_tokens, head_dim]
@@ -510,10 +515,10 @@ class RoPEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             # Apply template based on query/document mode
             template = query_template if is_query else doc_template

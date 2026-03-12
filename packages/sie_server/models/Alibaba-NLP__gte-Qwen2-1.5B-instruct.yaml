@@ -18,13 +18,12 @@ profiles:
   default:
     max_batch_tokens: 16384
     compute_precision: bfloat16
-    adapter_path: sie_server.adapters.pytorch_embedding:PyTorchEmbeddingAdapter
+    adapter_path: sie_server.adapters.qwen2_flash:Qwen2FlashAdapter
     adapter_options:
       loadtime:
-        attn_implementation: sdpa
         uses_legacy_transformers_cache: true
       runtime:
-        pooling: last_token
+        pooling: last
         normalize: true
         query_template: |-
           Instruct: {instruction}

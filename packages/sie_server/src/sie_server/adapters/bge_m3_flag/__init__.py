@@ -246,9 +246,9 @@ class BGEM3FlagAdapter(ModelAdapter):
         """Extract texts from items, optionally prepending instruction."""
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
-            text = item["text"]
+            text = item.text
             if instruction is not None:
                 text = f"{instruction} {text}"
             texts.append(text)

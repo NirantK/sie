@@ -45,7 +45,7 @@ class WorkerState:
     machine_profile: str = ""
 
     # Bundle info (for multi-bundle routing)
-    bundle: str = "default"  # default, sglang, florence2
+    bundle: str = "default"
 
     # Loaded models
     models: list[str] = field(default_factory=list)

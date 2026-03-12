@@ -319,6 +319,30 @@ class TestEncodeEndpoint:
         )
         assert response.status_code == 400  # Custom validation error (not Pydantic)
 
+    def test_encode_non_dict_items_rejected(self, client: TestClient) -> None:
+        """Non-dict items return 400, not 500."""
+        response = client.post(
+            "/v1/encode/test-model",
+            json={"items": ["just a string"]},
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `object`, got `str` - at `$.items[0]`"
+
+    def test_encode_non_string_text_rejected(self, client: TestClient) -> None:
+        """Item with non-string 'text' returns 400, not 500."""
+        response = client.post(
+            "/v1/encode/test-model",
+            json={"items": [{"text": 123}]},
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `str | null`, got `int` - at `$.items[0].text`"
+
 
 class TestMsgpackRequests:
     """Tests for msgpack request body handling (DESIGN.md Section 4.3)."""
@@ -456,5 +480,68 @@ class TestMsgpackRequests:
             "/v1/encode/test-model",
             content=msgpack_body,
             headers={"Content-Type": "application/x-msgpack"},
+        )
+        assert response.status_code == 200
+
+
+class TestMsgspecDecodeEndToEnd:
+    """Verify msgspec decode works end-to-end for JSON and msgpack with rich payloads."""
+
+    def test_json_decode_with_all_item_fields(self, client: TestClient) -> None:
+        """JSON request with text + id + metadata decodes through msgspec correctly."""
+        response = client.post(
+            "/v1/encode/test-model",
+            json={
+                "items": [
+                    {"id": "doc-1", "text": "Hello world", "metadata": {"source": "test"}},
+                    {"id": "doc-2", "text": "Another doc"},
+                    {"text": "No id or metadata"},
+                ],
+                "params": {
+                    "output_types": ["dense"],
+                    "instruction": "Represent this document",
+                },
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 3
+        assert data["items"][0]["id"] == "doc-1"
+        assert data["items"][1]["id"] == "doc-2"
+
+    def test_msgpack_decode_with_all_item_fields(self, client: TestClient) -> None:
+        """Msgpack request with text + id + metadata decodes through msgspec correctly."""
+        request_data = {
+            "items": [
+                {"id": "doc-1", "text": "Hello world", "metadata": {"source": "test"}},
+                {"id": "doc-2", "text": "Another doc"},
+            ],
+            "params": {
+                "output_types": ["dense"],
+                "instruction": "Represent this document",
+            },
+        }
+        msgpack_body = msgpack.packb(request_data, use_bin_type=True)
+
+        response = client.post(
+            "/v1/encode/test-model",
+            content=msgpack_body,
+            headers={"Content-Type": "application/msgpack", "Accept": "application/json"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 2
+        assert data["items"][0]["id"] == "doc-1"
+
+    def test_unknown_fields_ignored(self, client: TestClient) -> None:
+        """Extra fields in request body are silently ignored (forward compatibility)."""
+        response = client.post(
+            "/v1/encode/test-model",
+            json={
+                "items": [{"text": "Hello", "future_field": 42}],
+                "unknown_top_level": True,
+            },
+            headers=JSON_HEADERS,
         )
         assert response.status_code == 200

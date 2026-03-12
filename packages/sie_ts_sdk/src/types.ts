@@ -31,7 +31,7 @@ export type OutputType = "dense" | "sparse" | "multivector";
  * // With images for multimodal models (ColPali, CLIP)
  * { text: "Description", images: [imageBytes] }
  *
- * // Pre-encoded multivector for client-side MaxSim
+ * // Pre-encoded multivector (for use with maxsim utility)
  * { multivector: [tokenEmbedding1, tokenEmbedding2, ...] }
  */
 export interface Item {
@@ -41,7 +41,7 @@ export interface Item {
   text?: string;
   /** Images as byte arrays (JPEG/PNG) for multimodal models */
   images?: Uint8Array[];
-  /** Pre-encoded multivector for client-side MaxSim scoring */
+  /** Pre-encoded multivector (for use with maxsim utility) */
   multivector?: Float32Array[];
   /** Arbitrary metadata (passed through to results) */
   metadata?: Record<string, unknown>;

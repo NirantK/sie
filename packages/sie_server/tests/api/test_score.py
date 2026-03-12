@@ -340,6 +340,51 @@ class TestScoreEndpoint:
         )
         assert response.status_code == 400  # Custom validation error (not Pydantic)
 
+    def test_score_non_dict_items_rejected(self, client: TestClient) -> None:
+        """Non-dict items return 400, not 500."""
+        response = client.post(
+            "/v1/score/test-reranker",
+            json={
+                "query": {"text": "Query"},
+                "items": ["just a string", 123],
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `object`, got `str` - at `$.items[0]`"
+
+    def test_score_non_string_text_in_item_rejected(self, client: TestClient) -> None:
+        """Item with non-string 'text' returns 400, not 500."""
+        response = client.post(
+            "/v1/score/test-reranker",
+            json={
+                "query": {"text": "Query"},
+                "items": [{"text": 123}],
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `str | null`, got `int` - at `$.items[0].text`"
+
+    def test_score_non_string_text_in_query_rejected(self, client: TestClient) -> None:
+        """Query with non-string 'text' returns 400, not 500."""
+        response = client.post(
+            "/v1/score/test-reranker",
+            json={
+                "query": {"text": 456},
+                "items": [{"text": "valid"}],
+            },
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["detail"]["code"] == "INVALID_INPUT"
+        assert data["detail"]["message"] == "Expected `str | null`, got `int` - at `$.query.text`"
+
     def test_score_missing_query_rejected(self, client: TestClient) -> None:
         """Missing query is rejected."""
         response = client.post(

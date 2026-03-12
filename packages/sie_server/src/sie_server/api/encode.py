@@ -1,5 +1,5 @@
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -15,7 +15,7 @@ from sie_server.api.helpers import (
 )
 from sie_server.api.options import resolve_runtime_options
 from sie_server.api.serialization import MsgPackResponse
-from sie_server.api.validation import validate_encode_request, validate_machine_profile_header
+from sie_server.api.validation import validate_machine_profile_header
 from sie_server.config.model import ModelConfig
 from sie_server.core.encode_pipeline import EncodePipeline
 from sie_server.core.worker import QueueFullError
@@ -24,6 +24,7 @@ from sie_server.observability.tracing import tracer
 from sie_server.types.inputs import Item
 from sie_server.types.openapi import EncodeResponseModel
 from sie_server.types.outputs import DenseVector, EncodeResult, MultiVector, SparseVector
+from sie_server.types.requests import EncodeRequest
 from sie_server.types.responses import EncodeResponse, ErrorCode, TimingInfo
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ def _build_response_items(
     response_items = []
     for i, item in enumerate(items):
         result_dict: dict[str, Any] = {}
-        item_id = item.get("id")
+        item_id = item.id
         if item_id is not None:
             result_dict["id"] = item_id
 
@@ -220,15 +221,13 @@ async def encode(
         if x_machine_profile:
             span.set_attribute("machine_profile", x_machine_profile)
 
-        # Parse request body (msgpack or JSON) using helper
-        request = await RequestParser.parse(http_request, validate_encode_request)
+        request = await RequestParser.parse(http_request, EncodeRequest)
 
         # Set span attributes from request
-        items = request["items"]
-        params = request.get("params")
-        span.set_attribute("batch_size", len(items))
+        params = request.params
+        span.set_attribute("batch_size", len(request.items))
         if params:
-            span.set_attribute("output_types", ",".join(params.get("output_types") or ["dense"]))
+            span.set_attribute("output_types", ",".join(params.output_types or ["dense"]))
 
         registry = http_request.app.state.registry
         device = registry.device
@@ -247,10 +246,10 @@ async def encode(
         config = registry.get_config(model)
 
         # Get instruction from params
-        instruction = params.get("instruction") if params else None
+        instruction = params.instruction if params else None
 
         # Resolve profile and merge runtime options
-        request_options = params.get("options") if params else None
+        request_options = params.options if params else None
         profile_name = request_options.get("profile") if request_options else None
         options = resolve_runtime_options(config, request_options, span)
 
@@ -301,14 +300,13 @@ async def encode(
                 ) from e
 
         # Get output_types: profile > request param > default
-        output_types: list[str] = (
-            options.get("output_types") or (params.get("output_types") if params else None) or ["dense"]
-        )
+        output_types: list[str] = options.get("output_types") or (params.output_types if params else None) or ["dense"]
 
         # Get output_dtype: request param > profile > default
         # Request param takes precedence to allow per-request overrides
-        output_dtype: OutputDType = (
-            (params.get("output_dtype") if params else None) or options.get("output_dtype") or DEFAULT_OUTPUT_DTYPE
+        output_dtype: OutputDType = cast(
+            "OutputDType",
+            (params.output_dtype if params else None) or options.get("output_dtype") or DEFAULT_OUTPUT_DTYPE,
         )
 
         # Add resolved output_dtype to options for postprocessor registry
@@ -346,6 +344,8 @@ async def encode(
                 adapter_output_types.append("multivector")
         else:
             adapter_output_types = output_types  # No copy needed - not mutating
+
+        items = request.items
 
         # Run encoding (preprocess → execute)
         error_handler = InferenceErrorHandler(model, "encode", span, ctx=ctx)

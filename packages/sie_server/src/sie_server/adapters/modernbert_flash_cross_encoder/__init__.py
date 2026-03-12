@@ -467,9 +467,9 @@ class ModernBertFlashCrossEncoderAdapter(ModelAdapter):
 
     def _extract_text(self, item: Item) -> str:
         """Extract text from an item."""
-        if item.get("text") is None:
+        if item.text is None:
             raise ValueError(_ERR_REQUIRES_TEXT)
-        return item["text"]
+        return item.text
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""

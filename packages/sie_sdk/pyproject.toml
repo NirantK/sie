@@ -9,7 +9,7 @@ dependencies = [
     "httpx>=0.28,<1",
 
     # WebSocket client
-    "websockets>=13,<14",
+    "websockets>=14,<15",
 
     # Serialization
     "msgpack>=1.1,<2",

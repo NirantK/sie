@@ -656,10 +656,10 @@ class NomicFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             # Apply task prefix template
             template = query_template if is_query else doc_template

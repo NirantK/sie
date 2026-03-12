@@ -9,6 +9,8 @@ Using TypedDict for zero runtime overhead - validation is done manually where ne
 
 from typing import Any, TypedDict, TypeGuard
 
+import msgspec
+
 
 class ImageInput(TypedDict, total=False):
     """Image input for multimodal models (wire format).
@@ -54,42 +56,28 @@ class VideoInput(TypedDict, total=False):
     format: str | None
 
 
-class Item(TypedDict, total=False):
-    """A single item to encode, score, or extract from (wire format).
+class Item(msgspec.Struct):
+    """A single item to encode, score, or extract from.
 
-    Items can contain text, images, audio, or video. Most models operate on text only,
-    but multimodal models (ColPali, CLIP) can process images alongside text.
-
-    Attributes:
-        id: Optional identifier for this item. Returned in responses.
-        text: Text content to process.
-        images: Images for multimodal models.
-        audio: Audio for audio models.
-        video: Video for video models.
-        metadata: Arbitrary metadata. Not used by models, returned in responses.
+    All fields are optional. Models accept text-only, image-only, or multimodal
+    items depending on their capabilities.
     """
 
-    id: str
-    text: str
-    images: list[ImageInput]
-    audio: AudioInput
-    video: VideoInput
-    metadata: dict[str, Any]
+    id: str | None = None
+    text: str | None = None
+    images: list[dict[str, Any]] | None = None
+    audio: dict[str, Any] | None = None
+    video: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 # =============================================================================
 # Type Guards
 # =============================================================================
-# Python 3.12 removed isinstance() support for TypedDict.
-# These TypeGuard functions provide runtime validation while maintaining
-# type narrowing for static type checkers.
 
 
 def is_image_input(obj: Any) -> TypeGuard[ImageInput]:
     """Check if obj is a valid ImageInput dict.
-
-    TypedDict does not support isinstance() in Python 3.12+.
-    This type guard validates structure and enables type narrowing.
 
     Args:
         obj: Object to validate.
@@ -124,13 +112,13 @@ def is_video_input(obj: Any) -> TypeGuard[VideoInput]:
     return isinstance(obj, dict) and "data" in obj and isinstance(obj.get("data"), bytes)
 
 
-def is_item(obj: Any) -> TypeGuard[Item]:
-    """Check if obj is a valid Item dict.
+def is_item(obj: Any) -> TypeGuard[Item | dict[str, Any]]:
+    """Check if obj is a valid Item or Item-like dict.
 
     Args:
         obj: Object to validate.
 
     Returns:
-        True if obj is a dict (Item has all optional fields).
+        True if obj is an Item Struct or a dict.
     """
-    return isinstance(obj, dict)
+    return isinstance(obj, (dict, Item))

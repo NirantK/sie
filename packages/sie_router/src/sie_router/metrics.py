@@ -72,7 +72,7 @@ def record_pending_demand(machine_profile: str, bundle: str, pool_name: str = "d
 
     Args:
         machine_profile: Machine profile name (e.g., "l4-spot", "a100-40gb").
-        bundle: Dependency bundle (e.g., "default", "sglang").
+        bundle: Dependency bundle (e.g., "default").
         pool_name: Name of the pool requesting capacity.
     """
     key = _demand_key(machine_profile, bundle)

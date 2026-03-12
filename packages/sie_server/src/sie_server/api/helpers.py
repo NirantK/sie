@@ -1,13 +1,13 @@
 import logging
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+import msgspec
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from sie_server.api.serialization import MsgPackResponse, _convert_for_json, deserialize_msgpack
+from sie_server.api.serialization import MsgPackResponse, _convert_for_json
 from sie_server.core.timing import RequestTiming
 from sie_server.core.worker import QueueFullError
 from sie_server.observability.metrics import record_request
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
 
 # Content types
 MSGPACK_CONTENT_TYPE = "application/msgpack"
@@ -110,46 +111,40 @@ class ContentNegotiator:
 
 
 class RequestParser:
-    """Parses and validates HTTP request bodies."""
+    """Parses and validates HTTP request bodies via msgspec."""
 
     @staticmethod
-    async def parse(
-        http_request: Request,
-        validator: Callable[[dict[str, Any]], None],
-    ) -> dict[str, Any]:
-        """Parse request body as msgpack or JSON based on Content-Type.
+    async def parse(http_request: Request, type: type[T]) -> T:
+        """Parse the request body into a typed msgspec Struct.
 
-        Per DESIGN.md Section 4.3: All requests and responses use msgpack with msgpack-numpy.
-        JSON is supported as fallback for debugging.
-
-        Uses manual validation instead of Pydantic for zero overhead.
+        Supports both msgpack (default) and JSON (fallback) based on
+        Content-Type header.
 
         Args:
             http_request: FastAPI Request object.
-            validator: Validation function that raises HTTPException on invalid data.
+            type: The msgspec.Struct type to parse into.
 
         Returns:
-            Parsed and validated request data as dict.
+            Parsed and validated request as a typed Struct instance.
 
         Raises:
             HTTPException: 400 if parsing or validation fails.
         """
         content_type = http_request.headers.get("content-type")
+        body = await http_request.body()
 
         try:
             if ContentNegotiator.is_msgpack_request(content_type):
-                # Parse msgpack body
-                body = await http_request.body()
-                data = deserialize_msgpack(body)
-            else:
-                # Parse JSON body (fallback)
-                data = await http_request.json()
-
-            # Manual validation (no Pydantic overhead)
-            validator(data)
-            return data
-        except HTTPException:
-            raise
+                return msgspec.msgpack.decode(body, type=type)
+            return msgspec.json.decode(body, type=type)
+        except (msgspec.ValidationError, msgspec.DecodeError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": ErrorCode.INVALID_INPUT.value,
+                    "message": str(e),
+                },
+            ) from e
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

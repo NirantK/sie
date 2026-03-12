@@ -98,8 +98,8 @@ def sie_server(device: str) -> Generator[str]:
 
     # Start server with default-bundle models for integration testing:
     # - bge-m3 (embedding with dense/sparse/multivector)
-    # Note: GLiNER models need the gliner bundle (transformers<4.52) — see #185
-    models = "BAAI/bge-m3:bge_m3_flag"
+    # - gliner-bert-tiny (extraction) — only when gliner is installed
+    models = "BAAI/bge-m3:bge_m3_flag,NeuML/gliner-bert-tiny"
 
     cmd = [
         mise_path,
@@ -263,8 +263,6 @@ def sie_docker_server() -> Generator[str]:
     - Dependency issues
 
     Set SIE_DOCKER_IMAGE env var to use a pre-built image (skips build).
-
-    Regression test for: https://github.com/superlinked/sie-internal/issues/10
     """
     docker_client = _get_docker_client()
 

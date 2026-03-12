@@ -13,7 +13,7 @@ metadata:
     {{- include "sie-cluster.labels" . | nindent 4 }}
     app.kubernetes.io/component: router-config
 data:
-  {{- range $path, $_ := .Files.Glob "files/bundles/*.toml" }}
+  {{- range $path, $_ := .Files.Glob "files/bundles/*.yaml" }}
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
   {{- end }}

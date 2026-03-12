@@ -42,7 +42,6 @@ PoolingStrategy = Literal["cls", "mean"]
 
 _ERR_NOT_LOADED = "Model not loaded. Call load() first."
 _ERR_REQUIRES_TEXT = "XLMRobertaFlashAdapter requires text input"
-_ERR_CPU_NOT_SUPPORTED = "XLMRobertaFlashAdapter requires CUDA. Use pytorch_embedding adapter for CPU."
 
 
 class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
@@ -93,23 +92,6 @@ class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._padding_idx: int = 1  # XLMRoberta default, set properly in load()
         self._dense_dim: int | None = None
 
-    @classmethod
-    def create_for_device(cls, device: str, **kwargs: Any) -> ModelAdapter:
-        """Factory method that returns the appropriate adapter for the device.
-
-        For non-CUDA devices or when flash-attn is unavailable, returns SentenceTransformerDenseAdapter.
-
-        Args:
-            device: Device string (e.g., "cuda:0", "mps", "cpu").
-            **kwargs: Adapter initialization parameters.
-
-        Returns:
-            XLMRobertaFlashAdapter for CUDA with flash-attn, SentenceTransformerDenseAdapter otherwise.
-        """
-        from sie_server.adapters.sentence_transformer import SentenceTransformerDenseAdapter
-
-        return cls._create_flash_or_fallback(device, fallback_class=SentenceTransformerDenseAdapter, **kwargs)
-
     @property
     def capabilities(self) -> ModelCapabilities:
         """Return model capabilities."""
@@ -131,16 +113,13 @@ class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         Args:
             device: Device string (must be "cuda" or "cuda:X").
 
-        Raises:
-            RuntimeError: If device is not CUDA (flash attention requires GPU).
         """
-        if not device.startswith("cuda"):
-            raise RuntimeError(_ERR_CPU_NOT_SUPPORTED)
-
         from transformers import AutoModel, AutoTokenizer
 
         self._device = device
         dtype = self._resolve_dtype()
+
+        self._use_flash = device.startswith("cuda")
 
         logger.info(
             "Loading %s on device=%s with dtype=%s, attn=flash_varlen, pooling=%s",
@@ -269,7 +248,10 @@ class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             hidden = self._run_embeddings(input_ids_packed, position_ids_packed)
 
             # Run transformer layers with flash attention
-            hidden = self._run_transformer_flash(hidden, cu_seqlens, max_seqlen, total_tokens)
+            if self._use_flash:
+                hidden = self._run_transformer_flash(hidden, cu_seqlens, max_seqlen, total_tokens)
+            else:
+                hidden = self._run_transformer_standard(hidden, cu_seqlens, max_seqlen, total_tokens)
 
             # Pool to get dense embeddings
             dense_vecs = self._pool_embeddings(
@@ -373,6 +355,94 @@ class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         return hidden
 
+    def _run_transformer_standard(
+        self,
+        hidden: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        max_seqlen: int,
+        total_tokens: int,
+    ) -> torch.Tensor:
+        """Run transformer layers using standard PyTorch SDPA (CPU/MPS compatible).
+
+        Expects `hidden` to be packed as shape [total_tokens, hidden_size] and uses
+        `cu_seqlens` to iterate per-sequence slices (no padding required).
+
+        Notes:
+        - Uses torch.nn.functional.scaled_dot_product_attention
+        - Produces attention output equivalent to non-causal self-attention
+        - Handles dropout via the module dropout layers (p=0 in SDPA when eval)
+        """
+        import torch.nn.functional as F
+
+        if self._model is None:
+            raise RuntimeError(_ERR_NOT_LOADED)
+
+        model = self._model
+        num_heads = model.config.num_attention_heads  # type: ignore[union-attr]
+        hidden_size = model.config.hidden_size  # type: ignore[union-attr]
+        head_dim = hidden_size // num_heads
+
+        if hidden_size % num_heads != 0:
+            raise ValueError(f"hidden_size ({hidden_size}) must be divisible by num_heads ({num_heads}).")
+
+        # Ensure cu_seqlens is on CPU for cheap .item() access; it's tiny.
+        # (If you prefer keeping on device, remove this and keep .item() calls.)
+        if cu_seqlens.is_cuda:
+            cu_seqlens_cpu = cu_seqlens.detach().to("cpu")
+        else:
+            cu_seqlens_cpu = cu_seqlens
+
+        for layer in model.encoder.layer:  # type: ignore[union-attr]
+            attn_self = layer.attention.self
+
+            # QKV projections on packed hidden
+            q = attn_self.query(hidden).view(total_tokens, num_heads, head_dim)
+            k = attn_self.key(hidden).view(total_tokens, num_heads, head_dim)
+            v = attn_self.value(hidden).view(total_tokens, num_heads, head_dim)
+
+            # SDPA expects [B, H, L, D]; we run per sequence with B=1 to avoid padding.
+            attn_out_chunks: list[torch.Tensor] = []
+            for i in range(cu_seqlens_cpu.numel() - 1):
+                start = int(cu_seqlens_cpu[i].item())
+                end = int(cu_seqlens_cpu[i + 1].item())
+                if end <= start:
+                    continue  # defensive: skip empty
+
+                qs = q[start:end].transpose(0, 1).unsqueeze(0)  # [1, H, L, D]
+                ks = k[start:end].transpose(0, 1).unsqueeze(0)  # [1, H, L, D]
+                vs = v[start:end].transpose(0, 1).unsqueeze(0)  # [1, H, L, D]
+
+                # No mask; non-causal self-attention
+                # dropout_p must be 0.0 in eval; in train you could pass attn_self.dropout.p
+                dropout_p = 0.0 if not model.training else float(getattr(attn_self, "dropout", 0.0))
+                out = F.scaled_dot_product_attention(
+                    qs,
+                    ks,
+                    vs,
+                    attn_mask=None,
+                    dropout_p=dropout_p,
+                    is_causal=False,
+                )  # [1, H, L, D]
+
+                out = out.squeeze(0).transpose(0, 1).contiguous()  # [L, H, D]
+                attn_out_chunks.append(out)
+
+            attn_out = torch.cat(attn_out_chunks, dim=0).view(total_tokens, hidden_size)
+
+            # Output projection + residual + LN (mirrors HF)
+            attn_out = layer.attention.output.dense(attn_out)
+            attn_out = layer.attention.output.dropout(attn_out)
+            hidden = layer.attention.output.LayerNorm(attn_out + hidden)
+
+            # FFN block (mirrors HF)
+            inter = layer.intermediate.dense(hidden)
+            inter = layer.intermediate.intermediate_act_fn(inter)
+            out = layer.output.dense(inter)
+            out = layer.output.dropout(out)
+            hidden = layer.output.LayerNorm(out + hidden)
+
+        return hidden
+
     def _pool_embeddings(
         self,
         hidden: torch.Tensor,
@@ -429,10 +499,10 @@ class XLMRobertaFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             # Apply template based on query/document mode
             template = query_template if is_query else doc_template

@@ -30,8 +30,8 @@ profiles:
         query_max_length: 32
         skip_special_tokens: false
         query_expansion: false
-        query_prefix: '[unused0] '
-        doc_prefix: '[unused1] '
+        query_prefix: '[Q] '
+        doc_prefix: '[D] '
       runtime:
         muvera: null
   muvera:

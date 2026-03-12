@@ -51,7 +51,7 @@ terraform init && terraform apply
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `install_sie` | `true` | Install SIE via Helm |
-| `sie_bundle` | `default` | Server bundle (default, sglang, florence2) |
+| `sie_bundle` | `default` | Server bundle (default) |
 | `sie_router_replicas` | `2` | Router replicas (HA) |
 | `sie_autoscaling_cooldown` | `600` | KEDA cooldown (seconds) |
 | `sie_router_service_type` | `ClusterIP` | Router service type (`ClusterIP` or `LoadBalancer`) |

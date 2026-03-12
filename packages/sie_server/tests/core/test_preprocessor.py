@@ -93,9 +93,9 @@ class TestTextPreprocessor:
 
         preprocessor = TextPreprocessor(mock_tokenizer, "test-model")
         items: list[Item] = [
-            {"text": "Short"},
-            {"text": "A bit longer"},
-            {"text": "X"},
+            Item(text="Short"),
+            Item(text="A bit longer"),
+            Item(text="X"),
         ]
 
         batch = preprocessor.prepare(items, config=mock_config)
@@ -253,9 +253,9 @@ class TestImagePreprocessor:
         preprocessor = ImagePreprocessor(mock_processor, "test-model")
 
         items: list[Item] = [
-            {"images": [ImageInput(data=sample_image_bytes, format="jpeg")]},
-            {"images": [ImageInput(data=sample_image_bytes, format="jpeg")]},
-            {"images": [ImageInput(data=sample_image_bytes, format="jpeg")]},
+            Item(images=[ImageInput(data=sample_image_bytes, format="jpeg")]),
+            Item(images=[ImageInput(data=sample_image_bytes, format="jpeg")]),
+            Item(images=[ImageInput(data=sample_image_bytes, format="jpeg")]),
         ]
 
         batch = preprocessor.prepare(items, config=mock_config)
@@ -272,9 +272,9 @@ class TestImagePreprocessor:
         preprocessor = ImagePreprocessor(mock_processor, "test-model")
 
         items: list[Item] = [
-            {"text": "text only"},  # No images
-            {"images": [ImageInput(data=sample_image_bytes, format="jpeg")]},
-            {"text": "also text only"},  # No images
+            Item(text="text only"),
+            Item(images=[ImageInput(data=sample_image_bytes, format="jpeg")]),
+            Item(text="also text only"),
         ]
 
         batch = preprocessor.prepare(items, config=mock_config)
@@ -467,7 +467,7 @@ class TestNemoColEmbedPreprocessor:
         )
 
         items: list[Item] = [
-            {"images": [ImageInput(data=sample_image_bytes)]},
+            Item(images=[ImageInput(data=sample_image_bytes)]),
         ]
 
         batch = preprocessor.prepare(items, config=mock_config)

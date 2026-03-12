@@ -226,8 +226,8 @@ class CLIPAdapter(ModelAdapter):
         Returns:
             Numpy array of shape [dense_dim].
         """
-        has_text = item.get("text") is not None
-        images = item.get("images")
+        has_text = item.text is not None
+        images = item.images
         has_images = images is not None and len(images) > 0
 
         if not has_text and not has_images:
@@ -238,8 +238,8 @@ class CLIPAdapter(ModelAdapter):
             # Image encoding (or image+text where image takes precedence)
             pil_images = self._load_images(item)
             return self._encode_images(pil_images)
-        # Text-only encoding
-        return self._encode_text(item["text"])
+        # Text-only encoding (text is guaranteed non-None if no images)
+        return self._encode_text(item.text)  # type: ignore[arg-type]
 
     def _load_images(self, item: Item) -> list[Image.Image]:
         """Load images from item into PIL Images.
@@ -253,7 +253,7 @@ class CLIPAdapter(ModelAdapter):
         from PIL import Image
 
         pil_images = []
-        for img_input in item.get("images") or []:
+        for img_input in item.images or []:
             # img_input is ImageInput TypedDict with data (bytes) and optional format
             img_bytes = img_input["data"]
             pil_img = Image.open(io.BytesIO(img_bytes))

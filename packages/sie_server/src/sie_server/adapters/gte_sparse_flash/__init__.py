@@ -126,6 +126,9 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._head_dim: int | None = None
         self._hidden_size: int | None = None
         self._use_flash: bool = False
+        self._idf: torch.Tensor | None = None
+        self._activation_mode: Literal["v1", "v3"] = "v1"
+        self._special_token_ids: list[int] = []
 
     @property
     def capabilities(self) -> ModelCapabilities:
@@ -195,6 +198,12 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             self._num_heads,
             self._head_dim,
         )
+        self._idf = self._try_load_idf_vector(self._tokenizer)
+        self._special_token_ids = sorted(set(self._get_special_token_ids_modelcard()))
+        if "v3" in self._model_name_or_path:
+            self._activation_mode = "v3"
+        else:
+            self._activation_mode = "v1"
 
     def _resolve_dtype(self) -> torch.dtype:
         """Resolve compute dtype."""
@@ -223,6 +232,9 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._head_dim = None
         self._hidden_size = None
         self._use_flash = False
+        self._idf = None
+        self._activation_mode = "v1"
+        self._special_token_ids = []
 
         gc.collect()
         if device and device.startswith("cuda"):
@@ -271,6 +283,10 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             doc_template=doc_template,
         )
 
+        # Inference-free query encoding via IDF lookup (doc-* checkpoint pattern)
+        if is_query and self._idf is not None:
+            return self._encode_query_idf(texts, is_query)
+
         if self._use_flash:
             return self._encode_flash(texts, is_query)
         return self._encode_native(texts, is_query)
@@ -290,12 +306,28 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         with torch.inference_mode():
             outputs = self._model(**inputs)
-            logits = outputs.logits
-            weights = torch.log1p(torch.relu(logits))
-            attention_mask = inputs.get("attention_mask")
-            sparse_results = self._aggregate_sparse_padded(weights, attention_mask)
+            logits = outputs.logits  # [B, L, V]
+            mask = inputs["attention_mask"].to(logits.device).unsqueeze(-1)  # [B, L, 1]
+            values, _ = torch.max(logits.float() * mask, dim=1)  # [B, V]
+            values = self._sparse_activation(values)
+            special_ids = self._get_special_token_ids_modelcard()
+            if special_ids:
+                values[:, special_ids] = 0.0
 
-        return self._to_inference_output(sparse_results, len(texts), is_query)
+            # Build SparseVector directly (no dict intermediary)
+            sparse_list: list[SparseVector] = []
+            for i in range(values.size(0)):
+                nonzero_mask = values[i] > 0
+                indices_i = torch.where(nonzero_mask)[0]
+                vals_i = values[i, indices_i]
+                sparse_list.append(
+                    SparseVector(
+                        indices=indices_i.cpu().numpy().astype(np.int32),
+                        values=vals_i.cpu().float().numpy(),
+                    )
+                )
+
+        return EncodeOutput(sparse=sparse_list, batch_size=len(texts), is_query=is_query)
 
     def _encode_flash(self, texts: list[str], is_query: bool) -> EncodeOutput:
         """Encode using flash attention with packed sequences."""
@@ -304,32 +336,35 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         if self._tokenizer is None:
             raise RuntimeError(_ERR_NOT_LOADED)
 
-        # Tokenize each sequence individually (no padding)
-        encodings = [
-            self._tokenizer(
-                text,
-                max_length=self._max_seq_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            for text in texts
-        ]
+        # Batch tokenize all texts at once (no padding for packing)
+        batch_encoding = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+        )
 
-        seq_lengths = [enc["input_ids"].shape[1] for enc in encodings]
+        # Build packed representation from batch encoding
+        seq_lengths = [len(ids) for ids in batch_encoding["input_ids"]]
         total_tokens = sum(seq_lengths)
         max_seqlen = max(seq_lengths)
 
-        # Pack input_ids
-        input_ids_packed = torch.cat([enc["input_ids"].squeeze(0) for enc in encodings]).to(self._device)
+        # Pack input_ids into a single 1-D tensor
+        input_ids_packed = torch.tensor(
+            [tok_id for ids in batch_encoding["input_ids"] for tok_id in ids],
+            dtype=torch.long,
+            device=self._device,
+        )
 
-        # Build cu_seqlens
+        # Build cu_seqlens using cumsum
         cu_seqlens = torch.zeros(len(texts) + 1, dtype=torch.int32, device=self._device)
-        for i, length in enumerate(seq_lengths):
-            cu_seqlens[i + 1] = cu_seqlens[i] + length
+        cu_seqlens[1:] = torch.tensor(seq_lengths, dtype=torch.int32, device=self._device).cumsum(0)
 
         with torch.inference_mode():
             # Build position IDs for RoPE
-            position_ids = self._build_position_ids(cu_seqlens, len(texts))
+            position_ids = self._build_position_ids(cu_seqlens)
 
             # Compute RoPE cos/sin
             cos, sin = self._compute_rope(position_ids, max_seqlen)
@@ -343,23 +378,61 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             )
 
             # Run MLM head
-            logits = self._model.lm_head(hidden)
+            logits = self._model.lm_head(hidden)  # [total_tokens, V]
 
-            # SPLADE weights
-            weights = torch.log1p(torch.relu(logits))
+            # Compute activation weights on full tensor
+            weights = self._sparse_activation(logits.float())
 
-            # Aggregate sparse vectors
-            sparse_results = self._aggregate_sparse_packed(weights, cu_seqlens, seq_lengths)
+            # Max-pool over tokens per sequence to get sparse vectors
+            sparse_list = self._aggregate_sparse(weights, cu_seqlens, seq_lengths)
 
-        return self._to_inference_output(sparse_results, len(texts), is_query)
+        return EncodeOutput(sparse=sparse_list, batch_size=len(texts), is_query=is_query)
 
-    def _build_position_ids(self, cu_seqlens: torch.Tensor, num_seqs: int) -> torch.Tensor:
+    def _build_position_ids(self, cu_seqlens: torch.Tensor) -> torch.Tensor:
         """Build position IDs for packed sequences (each starts from 0)."""
-        pos_list = []
+        total_tokens = int(cu_seqlens[-1].item())
+        positions = torch.arange(total_tokens, device=self._device)
+        offsets = torch.repeat_interleave(
+            cu_seqlens[:-1],
+            cu_seqlens[1:] - cu_seqlens[:-1],
+        )
+        return positions - offsets
+
+    def _aggregate_sparse(
+        self,
+        weights: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        seq_lengths: list[int],
+    ) -> list[SparseVector]:
+        """Aggregate token weights to sparse vectors via max-pooling."""
+        results: list[SparseVector] = []
+        num_seqs = len(seq_lengths)
+
         for i in range(num_seqs):
-            seq_len = cu_seqlens[i + 1].item() - cu_seqlens[i].item()
-            pos_list.append(torch.arange(0, seq_len, device=self._device))
-        return torch.cat(pos_list)
+            start = cu_seqlens[i].item()
+            end = cu_seqlens[i + 1].item()
+
+            # Max-pool over positions for each vocab term
+            max_weights, _ = weights[start:end].max(dim=0)  # [vocab_size]
+
+            # Zero out special tokens on GPU
+            if self._special_token_ids:
+                max_weights[self._special_token_ids] = 0.0
+
+            # Get non-zero indices and values on GPU, then transfer once
+            nonzero_mask = max_weights > 0
+            indices = torch.where(nonzero_mask)[0]
+            values = max_weights[indices]
+
+            # Single CPU transfer
+            results.append(
+                SparseVector(
+                    indices=indices.cpu().numpy().astype(np.int32),
+                    values=values.cpu().float().numpy(),
+                )
+            )
+
+        return results
 
     def _compute_rope(
         self,
@@ -455,75 +528,122 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         return hidden
 
-    def _aggregate_sparse_padded(
-        self,
-        weights: torch.Tensor,
-        attention_mask: torch.Tensor | None,
-    ) -> list[dict[int, float]]:
-        """Aggregate sparse vectors from padded input."""
-        batch_size = weights.shape[0]
-        special_tokens = self._get_special_tokens()
-        results = []
-
-        for i in range(batch_size):
-            seq_weights = weights[i]
-            if attention_mask is not None:
-                mask = attention_mask[i].unsqueeze(-1)
-                seq_weights = seq_weights * mask
-
-            max_weights, _ = seq_weights.max(dim=0)
-            nonzero_mask = max_weights > 0
-            indices = torch.where(nonzero_mask)[0]
-            values = max_weights[nonzero_mask]
-
-            sparse_dict: dict[int, float] = {}
-            for idx, val in zip(indices.cpu().numpy(), values.cpu().numpy(), strict=True):
-                if idx not in special_tokens:
-                    sparse_dict[int(idx)] = float(val)
-            results.append(sparse_dict)
-
-        return results
-
-    def _aggregate_sparse_packed(
-        self,
-        weights: torch.Tensor,
-        cu_seqlens: torch.Tensor,
-        seq_lengths: list[int],
-    ) -> list[dict[int, float]]:
-        """Aggregate sparse vectors from packed input."""
-        special_tokens = self._get_special_tokens()
-        results = []
-
-        for i in range(len(seq_lengths)):
-            start = cu_seqlens[i].item()
-            end = cu_seqlens[i + 1].item()
-            seq_weights = weights[start:end]
-
-            max_weights, _ = seq_weights.max(dim=0)
-            nonzero_mask = max_weights > 0
-            indices = torch.where(nonzero_mask)[0]
-            values = max_weights[nonzero_mask]
-
-            sparse_dict: dict[int, float] = {}
-            for idx, val in zip(indices.cpu().numpy(), values.cpu().numpy(), strict=True):
-                if idx not in special_tokens:
-                    sparse_dict[int(idx)] = float(val)
-            results.append(sparse_dict)
-
-        return results
-
-    def _get_special_tokens(self) -> set[int]:
-        """Get set of special token IDs to exclude from sparse output."""
+    def _get_special_token_ids_modelcard(self) -> list[int]:
         if self._tokenizer is None:
             raise RuntimeError(_ERR_NOT_LOADED)
-        special_tokens = {
-            self._tokenizer.cls_token_id,
-            self._tokenizer.sep_token_id,
-            self._tokenizer.pad_token_id,
-            self._tokenizer.unk_token_id,
-        }
-        special_tokens.discard(None)
-        return special_tokens
+        ids: list[int] = []
+        for tok in self._tokenizer.special_tokens_map.values():
+            if isinstance(tok, list):
+                for t in tok:
+                    tid = self._tokenizer.vocab.get(t)
+                    if tid is not None:
+                        ids.append(int(tid))
+            else:
+                tid = self._tokenizer.vocab.get(tok)
+                if tid is not None:
+                    ids.append(int(tid))
+        return ids
+
+    def _sparse_activation(self, values: torch.Tensor) -> torch.Tensor:
+        """Apply SPLADE activation. v3 uses log1p(log1p(relu(.))); v1 uses log1p(relu(.))."""
+        if self._activation_mode == "v3":
+            return torch.log1p(torch.log1p(torch.relu(values)))
+        return torch.log1p(torch.relu(values))
+
+    def _try_load_idf_vector(self, tokenizer: PreTrainedTokenizerFast) -> torch.Tensor | None:
+        import json
+        from pathlib import Path
+
+        p = Path(self._model_name_or_path)
+        if p.exists() and p.is_dir():
+            idf_path = p / "idf.json"
+            if not idf_path.exists():
+                logger.warning("IDF not loaded for %s: idf.json not found at %s", self._model_name_or_path, idf_path)
+                return None
+            with open(idf_path, encoding="utf-8") as f:
+                idf = json.load(f)
+        else:
+            try:
+                from huggingface_hub import try_to_load_from_cache
+
+                cached_path = try_to_load_from_cache(
+                    repo_id=self._model_name_or_path,
+                    filename="idf.json",
+                )
+                # try_to_load_from_cache returns a str path, None (not cached),
+                # or _CACHED_NO_EXIST sentinel (explicitly absent). Only a str
+                # means the file is present locally.
+                if not isinstance(cached_path, str):
+                    # Not in local cache — try downloading
+                    from huggingface_hub import hf_hub_download
+
+                    cached_path = hf_hub_download(
+                        repo_id=self._model_name_or_path,
+                        filename="idf.json",
+                    )
+                if not isinstance(cached_path, str):
+                    logger.warning("IDF not found for %s", self._model_name_or_path)
+                    return None
+                with open(cached_path, encoding="utf-8") as f:
+                    idf = json.load(f)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("IDF not loaded for %s: %s", self._model_name_or_path, exc)
+                return None
+
+        idf_vec = torch.zeros(tokenizer.vocab_size, dtype=torch.float32)
+        for tok, w in idf.items():
+            tid = tokenizer._convert_token_to_id_with_added_voc(tok)
+            if tid is not None and 0 <= int(tid) < tokenizer.vocab_size:
+                idf_vec[int(tid)] = float(w)
+
+        nonzero = int((idf_vec > 0).sum().item())
+        logger.info(
+            "IDF loaded for %s: %d non-zero entries out of %d vocab tokens. "
+            "Query encoding will use inference-free IDF path.",
+            self._model_name_or_path,
+            nonzero,
+            tokenizer.vocab_size,
+        )
+        return idf_vec.to(self._device)
+
+    def _encode_query_idf(self, texts: list[str], is_query: bool) -> EncodeOutput:
+        if self._tokenizer is None or self._idf is None or self._vocab_size is None:
+            raise RuntimeError(_ERR_NOT_LOADED)
+
+        feat = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=True,
+            return_tensors="pt",
+            return_token_type_ids=False,
+        )
+        input_ids = feat["input_ids"].to(self._device)
+        attn = feat["attention_mask"].to(self._device).bool()
+
+        bsz = input_ids.size(0)
+        q = torch.zeros((bsz, self._vocab_size), device=self._device, dtype=torch.float32)
+
+        b_idx = torch.arange(bsz, device=self._device).unsqueeze(1).expand_as(input_ids)
+        q[b_idx[attn], input_ids[attn]] = 1.0
+        q = q * self._idf
+
+        special_ids = self._get_special_token_ids_modelcard()
+        if special_ids:
+            q[:, special_ids] = 0.0
+
+        sparse_list: list[SparseVector] = []
+        for i in range(bsz):
+            nz = torch.nonzero(q[i] > 0, as_tuple=False).squeeze(1)
+            vals = q[i, nz]
+            sparse_list.append(
+                SparseVector(
+                    indices=nz.cpu().numpy().astype(np.int32),
+                    values=vals.cpu().float().numpy(),
+                )
+            )
+
+        return EncodeOutput(sparse=sparse_list, batch_size=bsz, is_query=is_query)
 
     def _validate_output_types(self, output_types: list[str]) -> None:
         """Validate that output types are supported."""
@@ -546,10 +666,10 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
             template = query_template if is_query else doc_template
             if template:
                 text = template.format(text=text, instruction=instruction or "")
@@ -557,24 +677,6 @@ class GTESparseFlashAdapter(PEFTLoRAMixin, ModelAdapter):
                 text = f"{instruction} {text}"
             texts.append(text)
         return texts
-
-    def _to_inference_output(
-        self,
-        sparse_results: list[dict[int, float]],
-        batch_size: int,
-        is_query: bool,
-    ) -> EncodeOutput:
-        """Convert sparse dicts to EncodeOutput."""
-        sparse_list = []
-        for sparse_dict in sparse_results:
-            if sparse_dict:
-                indices = np.array(list(sparse_dict.keys()), dtype=np.int32)
-                values = np.array(list(sparse_dict.values()), dtype=np.float32)
-            else:
-                indices = np.array([], dtype=np.int32)
-                values = np.array([], dtype=np.float32)
-            sparse_list.append(SparseVector(indices=indices, values=values))
-        return EncodeOutput(sparse=sparse_list, batch_size=batch_size, is_query=is_query)
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""

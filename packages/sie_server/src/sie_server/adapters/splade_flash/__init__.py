@@ -1,29 +1,7 @@
-"""SPLADE Flash Attention adapter using flash_attn_varlen_func.
-
-This adapter uses Flash Attention 2's variable-length attention to process
-sequences without padding, eliminating padding waste and improving throughput.
-
-SPLADE models produce sparse lexical representations by:
-1. Running BERT encoder with MLM head
-2. Computing weights: log(1 + ReLU(logits))
-3. Max-aggregating over tokens per vocabulary term
-
-Supports SPLADE-based models like:
-- naver/splade-v3, splade-cocondenser-selfdistil
-- opensearch-project/opensearch-neural-sparse-*
-- prithivida/Splade_PP_en_v2
-
-Key features:
-- Uses flash_attn_varlen_func with cu_seqlens for packed sequences
-- No padding tokens = no wasted compute
-- Sparse output format: {indices: int32[], values: float32[]}
-
-See: https://github.com/Dao-AILab/flash-attention
-"""
-
 from __future__ import annotations
 
 import gc
+import importlib.util
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -39,7 +17,7 @@ from sie_server.types.inputs import Item
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from transformers import PreTrainedTokenizerFast
+    from transformers import PreTrainedTokenizerBase
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +25,23 @@ ComputePrecision = Literal["float16", "bfloat16", "float32"]
 
 _ERR_NOT_LOADED = "Model not loaded. Call load() first."
 _ERR_REQUIRES_TEXT = "SPLADEFlashAdapter requires text input"
-_ERR_CPU_NOT_SUPPORTED = "SPLADEFlashAdapter requires CUDA. Use sentence_transformer adapter for CPU."
+
+_Arch = Literal["bert", "roberta", "distilbert"]
+
+
+def _has_flash_attn() -> bool:
+    return importlib.util.find_spec("flash_attn") is not None
 
 
 class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
-    """SPLADE adapter using Flash Attention 2 with variable-length sequences.
+    """SPLADE adapter with flash-attention support for packed sequences.
 
-    This adapter eliminates padding waste by packing sequences and using
-    flash_attn_varlen_func. Achieves higher throughput than library-based adapters.
+    On CUDA with flash-attn installed, eliminates padding waste by packing
+    sequences and using flash_attn_varlen_func.
+
+    On non-CUDA devices (or when flash-attn is unavailable), delegates to the
+    model's own forward pass for bit-exact parity with the reference
+    sentence-transformers pipeline.
 
     SPLADE produces sparse lexical representations using masked language modeling:
     - weights = log(1 + ReLU(MLM_logits))
@@ -72,17 +59,6 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         trust_remote_code: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Initialize the adapter.
-
-        Args:
-            model_name_or_path: HuggingFace model ID or local path.
-            max_seq_length: Maximum sequence length.
-            compute_precision: Compute precision (float16 recommended for flash).
-            query_template: Optional template for queries.
-            doc_template: Optional template for documents.
-            trust_remote_code: Whether to trust remote code in model files.
-            **kwargs: Additional arguments (ignored, for compatibility).
-        """
         _ = kwargs
         self._model_name_or_path = str(model_name_or_path)
         self._max_seq_length = max_seq_length
@@ -91,51 +67,26 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._doc_template = doc_template
         self._trust_remote_code = trust_remote_code
 
-        self._model: Any = None  # BertForMaskedLM / DistilBertForMaskedLM
-        self._tokenizer: PreTrainedTokenizerFast | None = None
+        self._model: Any = None  # AutoModelForMaskedLM
+        self._tokenizer: PreTrainedTokenizerBase | None = None
         self._device: str | None = None
         self._vocab_size: int | None = None
-        self._arch: str | None = None  # "bert", "roberta", or "distilbert"
+        self._arch: _Arch | None = None
+        self._use_flash: bool = False
+        self._idf: torch.Tensor | None = None
 
     @classmethod
     def create_for_device(cls, device: str, **kwargs: Any) -> ModelAdapter:
-        """Factory method that returns the appropriate adapter for the device.
-
-        SPLADE requires CUDA and has no CPU fallback. SPLADE is a specialized sparse
-        encoding method that requires MLM head, and no generic fallback adapter exists.
-
-        Args:
-            device: Device string (e.g., "cuda:0", "mps", "cpu").
-            **kwargs: Adapter initialization parameters.
-
-        Returns:
-            SPLADEFlashAdapter for CUDA with flash-attn.
-
-        Raises:
-            RuntimeError: If device is not CUDA or flash-attn is unavailable.
-        """
-        if not device.startswith("cuda"):
-            msg = (
-                f"SPLADEFlashAdapter requires CUDA, got device='{device}'. "
-                "SPLADE is a specialized sparse encoding method with no CPU fallback adapter. "
-                "Use a CUDA-enabled device for SPLADE models."
-            )
-            raise RuntimeError(msg)
-
-        try:
-            import flash_attn
-
-            return cls(**kwargs)
-        except ImportError:
-            msg = (
-                f"flash-attn not installed for device '{device}'. "
-                "SPLADEFlashAdapter requires flash-attn. Install with: uv sync --extra flash-attn"
-            )
-            raise RuntimeError(msg) from None
+        if device.startswith("cuda") and _has_flash_attn():
+            logger.info("SPLADE: flash-attn available, using packed flash path")
+        elif device.startswith("cuda"):
+            logger.info("SPLADE: flash-attn unavailable, using native model forward")
+        else:
+            logger.info("SPLADE: non-CUDA device '%s', using native model forward", device)
+        return cls(**kwargs)
 
     @property
     def capabilities(self) -> ModelCapabilities:
-        """Return model capabilities."""
         return ModelCapabilities(
             inputs=["text"],
             outputs=["sparse"],
@@ -143,81 +94,77 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
     @property
     def dims(self) -> ModelDims:
-        """Return model dimensions."""
         if self._vocab_size is None:
             raise RuntimeError(_ERR_NOT_LOADED)
         return ModelDims(sparse=self._vocab_size)
 
     def load(self, device: str) -> None:
-        """Load the model onto the specified device.
-
-        Args:
-            device: Device string (must be "cuda" or "cuda:X").
-
-        Raises:
-            RuntimeError: If device is not CUDA (flash attention requires GPU).
-        """
-        if not device.startswith("cuda"):
-            raise RuntimeError(_ERR_CPU_NOT_SUPPORTED)
-
         from transformers import AutoModelForMaskedLM, AutoTokenizer
 
         self._device = device
-        dtype = self._resolve_dtype()
 
-        logger.info(
-            "Loading %s on device=%s with dtype=%s, attn=flash_varlen",
-            self._model_name_or_path,
-            device,
-            dtype,
-        )
+        # Use float32 on CPU/MPS for correctness; configured precision on CUDA
+        dtype = self._resolve_dtype() if device.startswith("cuda") else torch.float32
 
         self._tokenizer = AutoTokenizer.from_pretrained(
             self._model_name_or_path,
             trust_remote_code=self._trust_remote_code,
         )
 
-        # Load model with eager attention - we'll run our own flash attention
+        # Load with eager attention — the flash path runs its own attention;
+        # the native path uses the model's forward() directly.
         self._model = AutoModelForMaskedLM.from_pretrained(
             self._model_name_or_path,
             torch_dtype=dtype,
-            attn_implementation="eager",  # We handle attention manually
+            attn_implementation="eager",
             trust_remote_code=self._trust_remote_code,
         )
         self._model.to(device)
         self._model.eval()
 
+        self._arch = self._detect_arch()
         self._vocab_size = self._model.config.vocab_size
+        self._use_flash = device.startswith("cuda") and _has_flash_attn()
 
-        # Detect model architecture
-        if hasattr(self._model, "bert"):
-            self._arch = "bert"
-        elif hasattr(self._model, "roberta"):
-            self._arch = "roberta"
-        elif hasattr(self._model, "distilbert"):
-            self._arch = "distilbert"
-        else:
-            msg = f"Unsupported model architecture: {type(self._model).__name__}"
-            raise ValueError(msg)
+        # Disable packed flash path for RoBERTa until position-id parity is
+        # verified — fall back to native model forward which handles this
+        # correctly via its own embeddings module.
+        if self._arch == "roberta" and self._use_flash:
+            logger.warning("Disabling packed flash path for RoBERTa until position-id parity is verified")
+            self._use_flash = False
 
         logger.info(
-            "Loaded SPLADE: arch=%s, vocab_size=%d, hidden_size=%d",
+            "Loaded SPLADE: arch=%s, vocab_size=%d, hidden_size=%d, path=%s",
             self._arch,
             self._vocab_size,
             self._model.config.hidden_size,
+            "flash" if self._use_flash else "native",
         )
+        self._idf = self._try_load_idf_vector(self._tokenizer)
+
+    def _detect_arch(self) -> _Arch:
+        if hasattr(self._model, "bert"):
+            return "bert"
+        if hasattr(self._model, "roberta"):
+            return "roberta"
+        if hasattr(self._model, "distilbert"):
+            return "distilbert"
+        msg = f"Unsupported model architecture: {type(self._model).__name__}"
+        raise ValueError(msg)
 
     def _resolve_dtype(self) -> torch.dtype:
-        """Resolve compute dtype."""
-        dtype_map = {
+        dtype_map: dict[ComputePrecision, torch.dtype] = {
             "float16": torch.float16,
             "bfloat16": torch.bfloat16,
             "float32": torch.float32,
         }
-        return dtype_map.get(self._compute_precision, torch.float16)
+        try:
+            return dtype_map[self._compute_precision]
+        except KeyError as exc:
+            msg = f"Unsupported compute_precision={self._compute_precision!r}; expected one of {tuple(dtype_map)}"
+            raise ValueError(msg) from exc
 
     def unload(self) -> None:
-        """Unload the model and free resources."""
         device = self._device
 
         if self._model is not None:
@@ -231,10 +178,15 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         self._device = None
         self._vocab_size = None
         self._arch = None
-
+        self._use_flash = False
+        self._idf = None
         gc.collect()
         if device and device.startswith("cuda"):
             torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------
+    # Encode entry point
+    # ------------------------------------------------------------------
 
     def encode(
         self,
@@ -246,24 +198,11 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         prepared_items: Any = None,
         options: dict[str, Any] | None = None,
     ) -> EncodeOutput:
-        """Run inference returning standardized batched output.
-
-        Args:
-            items: List of items to encode.
-            output_types: Which outputs to compute (only "sparse" supported).
-            instruction: Optional instruction prefix.
-            is_query: Whether items are queries (affects template selection).
-            prepared_items: Not used by this adapter.
-
-        Returns:
-            EncodeOutput with sparse embeddings.
-        """
         if self._model is None or self._tokenizer is None:
             raise RuntimeError(_ERR_NOT_LOADED)
 
         self._validate_output_types(output_types)
 
-        # Resolve runtime options (config defaults -> profile -> request overrides)
         opts = options or {}
         query_template = opts.get("query_template", self._query_template)
         doc_template = opts.get("doc_template", self._doc_template)
@@ -276,91 +215,141 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             doc_template=doc_template,
         )
 
-        # Tokenize each sequence individually (no padding)
-        encodings = [
-            self._tokenizer(
-                text,
-                max_length=self._max_seq_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            for text in texts
-        ]
+        if not texts:
+            return EncodeOutput(sparse=[], batch_size=0, is_query=is_query)
 
-        # Build packed representation
-        seq_lengths = [enc["input_ids"].shape[1] for enc in encodings]
+        # Inference-free query encoding via IDF lookup (doc-* checkpoint pattern)
+        if is_query and self._idf is not None:
+            return self._encode_query_idf(texts, is_query)
+
+        if self._use_flash:
+            sparse_list = self._encode_flash(texts)
+        else:
+            sparse_list = self._encode_native(texts)
+
+        return EncodeOutput(sparse=sparse_list, batch_size=len(items), is_query=is_query)
+
+    # ------------------------------------------------------------------
+    # Native path — standard model forward (CPU / MPS / CUDA-without-flash)
+    # ------------------------------------------------------------------
+
+    def _encode_native(self, texts: list[str]) -> list[SparseVector]:
+        """Encode using the model's standard forward pass.
+
+        Uses padded batches with the model's own attention implementation for
+        bit-exact parity with the reference sentence-transformers pipeline.
+        """
+        inputs = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        attention_mask = inputs["attention_mask"]
+
+        with torch.inference_mode():
+            output = self._model(**inputs)
+            logits = output.logits if hasattr(output, "logits") else output[0]
+
+            # Mask padding positions before max-pooling
+            weights = torch.log1p(torch.relu(logits))
+            weights = weights * attention_mask.unsqueeze(-1)
+
+            # Max-pool over tokens per sequence
+            max_weights, _ = weights.max(dim=1)  # [batch, vocab_size]
+
+        return self._dense_to_sparse_list(max_weights)
+
+    # ------------------------------------------------------------------
+    # Flash path — packed sequences with flash_attn_varlen_func (CUDA)
+    # ------------------------------------------------------------------
+
+    def _encode_flash(self, texts: list[str]) -> list[SparseVector]:
+        """Encode using packed sequences with flash attention."""
+        batch_encoding = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+        )
+
+        seq_lengths = [len(ids) for ids in batch_encoding["input_ids"]]
         total_tokens = sum(seq_lengths)
         max_seqlen = max(seq_lengths)
 
-        # Pack input_ids
-        input_ids_packed = torch.cat([enc["input_ids"].squeeze(0) for enc in encodings]).to(self._device)
+        input_ids_packed = torch.tensor(
+            [tok_id for ids in batch_encoding["input_ids"] for tok_id in ids],
+            dtype=torch.long,
+            device=self._device,
+        )
 
-        # Build cu_seqlens (cumulative sequence lengths)
         cu_seqlens = torch.zeros(len(texts) + 1, dtype=torch.int32, device=self._device)
-        for i, length in enumerate(seq_lengths):
-            cu_seqlens[i + 1] = cu_seqlens[i] + length
+        cu_seqlens[1:] = torch.tensor(seq_lengths, dtype=torch.int32, device=self._device).cumsum(0)
 
         with torch.inference_mode():
-            # Build BERT-style position IDs (start at 0)
-            position_ids_packed = self._build_position_ids(cu_seqlens, len(texts))
-
-            # Run embeddings
+            position_ids_packed = self._build_position_ids(cu_seqlens)
             hidden = self._run_embeddings(input_ids_packed, position_ids_packed)
-
-            # Run transformer layers with flash attention
             hidden = self._run_transformer_flash(hidden, cu_seqlens, max_seqlen, total_tokens)
-
-            # Run MLM head to get logits
-            logits = self._run_mlm_head(hidden)  # [total_tokens, vocab_size]
-
-            # Compute SPLADE weights: log(1 + ReLU(logits))
+            logits = self._run_mlm_head(hidden)
             weights = torch.log1p(torch.relu(logits))
+            sparse_list = self._aggregate_sparse(weights, cu_seqlens, seq_lengths)
 
-            # Max-pool over tokens per sequence to get sparse vectors
-            sparse_results = self._aggregate_sparse(weights, input_ids_packed, cu_seqlens, seq_lengths)
+        return sparse_list
 
-        return self._to_inference_output(sparse_results, len(items), is_query)
+    # ------------------------------------------------------------------
+    # Flash path internals
+    # ------------------------------------------------------------------
 
-    def _build_position_ids(self, cu_seqlens: torch.Tensor, num_seqs: int) -> torch.Tensor:
-        """Build BERT-style position IDs for packed sequences."""
-        pos_list = []
-        for i in range(num_seqs):
-            seq_len = cu_seqlens[i + 1].item() - cu_seqlens[i].item()
-            pos_list.append(torch.arange(0, seq_len, device=self._device))
-        return torch.cat(pos_list)
+    def _build_position_ids(self, cu_seqlens: torch.Tensor) -> torch.Tensor:
+        """Build position IDs for packed sequences.
+
+        BERT uses 0-based positions. RoBERTa offsets by padding_idx + 1.
+        """
+        total_tokens = int(cu_seqlens[-1].item())
+        positions = torch.arange(total_tokens, device=self._device, dtype=torch.long)
+        offsets = torch.repeat_interleave(
+            cu_seqlens[:-1],
+            cu_seqlens[1:] - cu_seqlens[:-1],
+        )
+        position_ids = positions - offsets
+
+        if self._arch == "roberta":
+            padding_idx = self._get_base_model().embeddings.padding_idx
+            position_ids = position_ids + padding_idx + 1
+
+        return position_ids
 
     def _get_base_model(self) -> Any:
-        """Get the base transformer model (bert, roberta, or distilbert)."""
         if self._arch == "bert":
             return self._model.bert
         if self._arch == "roberta":
             return self._model.roberta
-        # distilbert
-        return self._model.distilbert
+        if self._arch == "distilbert":
+            return self._model.distilbert
+        raise RuntimeError("Base model requested before architecture was detected")
 
     def _run_mlm_head(self, hidden: torch.Tensor) -> torch.Tensor:
-        """Run the MLM head to get vocabulary logits."""
         if self._arch == "distilbert":
-            # DistilBERT MLM: vocab_transform -> activation -> vocab_layer_norm -> vocab_projector
             hidden = self._model.vocab_transform(hidden)
             hidden = self._model.activation(hidden)
             hidden = self._model.vocab_layer_norm(hidden)
             return self._model.vocab_projector(hidden)
         if self._arch == "roberta":
-            # RoBERTa: lm_head module
             return self._model.lm_head(hidden)
-        # BERT: cls module
+        # BERT
         return self._model.cls(hidden)
 
     def _run_embeddings(self, input_ids: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
-        """Compute embeddings for packed input."""
         base_model = self._get_base_model()
         embeddings = base_model.embeddings
 
         word_emb = embeddings.word_embeddings(input_ids)
         pos_emb = embeddings.position_embeddings(position_ids)
 
-        # BERT has token_type_embeddings, DistilBERT doesn't
         if hasattr(embeddings, "token_type_embeddings"):
             token_type_emb = embeddings.token_type_embeddings(torch.zeros_like(input_ids))
             hidden = word_emb + pos_emb + token_type_emb
@@ -377,7 +366,6 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         max_seqlen: int,
         total_tokens: int,
     ) -> torch.Tensor:
-        """Run transformer layers using flash_attn_varlen_func."""
         from flash_attn import flash_attn_varlen_func
 
         base_model = self._get_base_model()
@@ -386,7 +374,6 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         head_dim = hidden_size // num_heads
         softmax_scale = 1.0 / (head_dim**0.5)
 
-        # Get encoder/transformer layers based on architecture
         if self._arch == "distilbert":
             layers = base_model.transformer.layer
         else:
@@ -394,19 +381,16 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         for layer in layers:
             if self._arch == "distilbert":
-                # DistilBERT attention structure: layer.attention (MultiHeadSelfAttention)
                 attention = layer.attention
                 query = attention.q_lin(hidden).view(total_tokens, num_heads, head_dim)
                 key = attention.k_lin(hidden).view(total_tokens, num_heads, head_dim)
                 value = attention.v_lin(hidden).view(total_tokens, num_heads, head_dim)
             else:
-                # BERT/RoBERTa: layer.attention.self
                 attention = layer.attention.self
                 query = attention.query(hidden).view(total_tokens, num_heads, head_dim)
                 key = attention.key(hidden).view(total_tokens, num_heads, head_dim)
                 value = attention.value(hidden).view(total_tokens, num_heads, head_dim)
 
-            # Flash attention with variable-length sequences
             attn_out = flash_attn_varlen_func(
                 query,
                 key,
@@ -421,12 +405,10 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             attn_out = attn_out.reshape(total_tokens, hidden_size)
 
             if self._arch == "distilbert":
-                # DistilBERT: out_lin, then sa_layer_norm (post-attention)
                 attn_out = attention.out_lin(attn_out)
                 attn_out = attention.dropout(attn_out)
                 hidden = layer.sa_layer_norm(attn_out + hidden)
 
-                # FFN: ffn (Linear) -> activation -> ffn (Linear)
                 inter = layer.ffn.lin1(hidden)
                 inter = layer.ffn.activation(inter)
                 inter = layer.ffn.dropout(inter)
@@ -434,12 +416,10 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
                 out = layer.ffn.dropout(out)
                 hidden = layer.output_layer_norm(out + hidden)
             else:
-                # BERT/RoBERTa structure
                 attn_out = layer.attention.output.dense(attn_out)
                 attn_out = layer.attention.output.dropout(attn_out)
                 hidden = layer.attention.output.LayerNorm(attn_out + hidden)
 
-                # FFN
                 inter = layer.intermediate.dense(hidden)
                 inter = layer.intermediate.intermediate_act_fn(inter)
                 out = layer.output.dense(inter)
@@ -448,68 +428,60 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
 
         return hidden
 
+    # ------------------------------------------------------------------
+    # Sparse output helpers
+    # ------------------------------------------------------------------
+
     def _aggregate_sparse(
         self,
         weights: torch.Tensor,
-        input_ids: torch.Tensor,
         cu_seqlens: torch.Tensor,
         seq_lengths: list[int],
-    ) -> list[dict[int, float]]:
-        """Aggregate token weights to sparse vectors via max-pooling.
+    ) -> list[SparseVector]:
+        """Max-pool packed token weights into per-sequence sparse vectors."""
+        results: list[SparseVector] = []
 
-        For each sequence, max-pool weights over positions for each vocab term.
-        Exclude special tokens (CLS, SEP, PAD).
-
-        Args:
-            weights: SPLADE weights [total_tokens, vocab_size].
-            input_ids: Packed input token IDs.
-            cu_seqlens: Cumulative sequence lengths.
-            seq_lengths: Length of each sequence.
-
-        Returns:
-            List of sparse dicts mapping token_id -> weight.
-        """
-        # Special tokens to exclude
-        special_tokens = {
-            self._tokenizer.cls_token_id,
-            self._tokenizer.sep_token_id,
-            self._tokenizer.pad_token_id,
-            self._tokenizer.unk_token_id,
-        }
-        special_tokens.discard(None)  # Remove None if any token ID is not set
-
-        results = []
-        num_seqs = len(seq_lengths)
-
-        for i in range(num_seqs):
+        for i in range(len(seq_lengths)):
             start = cu_seqlens[i].item()
             end = cu_seqlens[i + 1].item()
 
-            # Get weights and input_ids for this sequence
-            seq_weights = weights[start:end]  # [seq_len, vocab_size]
-            input_ids[start:end]  # [seq_len]
+            max_weights, _ = weights[start:end].max(dim=0)
 
-            # Max-pool over positions for each vocab term
-            # For efficiency, use scatter_reduce
-            max_weights, _ = seq_weights.max(dim=0)  # [vocab_size]
-
-            # Get non-zero indices and values
             nonzero_mask = max_weights > 0
             indices = torch.where(nonzero_mask)[0]
-            values = max_weights[nonzero_mask]
+            values = max_weights[indices]
 
-            # Filter out special tokens and build sparse dict
-            sparse_dict: dict[int, float] = {}
-            for idx, val in zip(indices.cpu().numpy(), values.cpu().numpy(), strict=True):
-                if idx not in special_tokens:
-                    sparse_dict[int(idx)] = float(val)
-
-            results.append(sparse_dict)
+            results.append(
+                SparseVector(
+                    indices=indices.cpu().numpy().astype(np.int32),
+                    values=values.cpu().float().numpy(),
+                )
+            )
 
         return results
 
+    @staticmethod
+    def _dense_to_sparse_list(max_weights: torch.Tensor) -> list[SparseVector]:
+        """Convert dense [batch, vocab_size] weights to a list of SparseVector."""
+        results: list[SparseVector] = []
+        for i in range(max_weights.size(0)):
+            row = max_weights[i]
+            nonzero_mask = row > 0
+            indices = torch.where(nonzero_mask)[0]
+            values = row[indices]
+            results.append(
+                SparseVector(
+                    indices=indices.cpu().numpy().astype(np.int32),
+                    values=values.cpu().float().numpy(),
+                )
+            )
+        return results
+
+    # ------------------------------------------------------------------
+    # Validation / text extraction
+    # ------------------------------------------------------------------
+
     def _validate_output_types(self, output_types: list[str]) -> None:
-        """Validate that output types are supported."""
         unsupported = set(output_types) - {"sparse"}
         if unsupported:
             msg = f"Unsupported output types: {unsupported}. SPLADEFlashAdapter only supports 'sparse'."
@@ -524,17 +496,15 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
         query_template: str | None = None,
         doc_template: str | None = None,
     ) -> list[str]:
-        """Extract texts from items, applying templates if configured."""
         query_template = query_template if query_template is not None else self._query_template
         doc_template = doc_template if doc_template is not None else self._doc_template
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
-            # Apply template based on query/document mode
             template = query_template if is_query else doc_template
             if template:
                 text = template.format(text=text, instruction=instruction or "")
@@ -544,24 +514,115 @@ class SPLADEFlashAdapter(PEFTLoRAMixin, ModelAdapter):
             texts.append(text)
         return texts
 
-    def _to_inference_output(
-        self,
-        sparse_results: list[dict[int, float]],
-        batch_size: int,
-        is_query: bool,
-    ) -> EncodeOutput:
-        """Convert sparse dicts to EncodeOutput."""
-        sparse_list = []
-        for sparse_dict in sparse_results:
-            if sparse_dict:
-                indices = np.array(list(sparse_dict.keys()), dtype=np.int32)
-                values = np.array(list(sparse_dict.values()), dtype=np.float32)
-            else:
-                indices = np.array([], dtype=np.int32)
-                values = np.array([], dtype=np.float32)
-            sparse_list.append(SparseVector(indices=indices, values=values))
-        return EncodeOutput(sparse=sparse_list, batch_size=batch_size, is_query=is_query)
+    # ------------------------------------------------------------------
+    # IDF / query-weight utilities
+    # ------------------------------------------------------------------
+
+    def _try_load_idf_vector(self, tokenizer: PreTrainedTokenizerBase) -> torch.Tensor | None:
+        from pathlib import Path
+
+        vocab = tokenizer.get_vocab()
+
+        for filename, loader in (
+            ("query_token_weights.txt", self._parse_query_token_weights),
+            ("idf.json", self._parse_idf_json),
+        ):
+            resolved = self._resolve_repo_file(Path(self._model_name_or_path), filename)
+            if resolved is None:
+                continue
+            idf = loader(resolved)
+            if idf is None:
+                continue
+
+            idf_vec = torch.zeros(tokenizer.vocab_size, dtype=torch.float32)
+            for tok, weight in idf.items():
+                tid = vocab.get(tok)
+                if tid is not None:
+                    idf_vec[tid] = float(weight)
+
+            logger.info(
+                "IDF loaded from %s for %s: %d non-zero entries out of %d vocab tokens",
+                filename,
+                self._model_name_or_path,
+                int((idf_vec > 0).sum().item()),
+                tokenizer.vocab_size,
+            )
+            return idf_vec.to(self._device)
+
+        logger.info("No IDF / query weights found for %s", self._model_name_or_path)
+        return None
+
+    @staticmethod
+    def _resolve_repo_file(model_path: Path, filename: str) -> str | None:
+        if model_path.exists() and model_path.is_dir():
+            candidate = model_path / filename
+            return str(candidate) if candidate.exists() else None
+        try:
+            from huggingface_hub import try_to_load_from_cache
+
+            cached = try_to_load_from_cache(repo_id=str(model_path), filename=filename)
+            if isinstance(cached, str):
+                return cached
+            from huggingface_hub import hf_hub_download
+
+            downloaded = hf_hub_download(repo_id=str(model_path), filename=filename)
+            return downloaded if isinstance(downloaded, str) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _parse_query_token_weights(path: str) -> dict[str, float] | None:
+        try:
+            weights: dict[str, float] = {}
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 2:
+                        weights[parts[0]] = float(parts[1])
+            return weights or None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _parse_idf_json(path: str) -> dict[str, float] | None:
+        import json
+
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _encode_query_idf(self, texts: list[str], is_query: bool) -> EncodeOutput:
+        if self._tokenizer is None or self._idf is None:
+            raise RuntimeError(_ERR_NOT_LOADED)
+
+        feat = self._tokenizer(
+            texts,
+            max_length=self._max_seq_length,
+            truncation=True,
+            padding=True,
+            return_tensors="pt",
+            return_token_type_ids=False,
+        )
+        input_ids = feat["input_ids"].to(self._device)
+        attn = feat["attention_mask"].to(self._device).bool()
+
+        sparse_list: list[SparseVector] = []
+        for row_ids, row_mask in zip(input_ids, attn, strict=True):
+            token_ids = torch.unique(row_ids[row_mask])
+            values = self._idf[token_ids]
+            keep = values > 0
+            token_ids = token_ids[keep]
+            values = values[keep]
+            sparse_list.append(
+                SparseVector(
+                    indices=token_ids.cpu().numpy().astype(np.int32),
+                    values=values.cpu().float().numpy(),
+                )
+            )
+
+        return EncodeOutput(sparse=sparse_list, batch_size=len(texts), is_query=is_query)
 
     def get_preprocessor(self) -> CharCountPreprocessor:
-        """Return CharCountPreprocessor for cost estimation without tokenization overhead."""
         return CharCountPreprocessor(model_name=self._model_name_or_path)

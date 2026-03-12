@@ -793,8 +793,14 @@ class SIEAsyncClient:
         # Deserialize response
         response_data = msgpack.unpackb(response.content, raw=False)
 
-        # Parse results
+        # Get timing info if present
+        timing = response_data.get("timing")
+
+        # Parse results and inject timing into each
         results = parse_encode_results(response_data["items"])
+        if timing:
+            for result in results:
+                result["timing"] = timing
 
         # Return single result if single item was passed
         return results[0] if single_item else results
@@ -875,7 +881,7 @@ class SIEAsyncClient:
         for path in paths:
             ws_url = self._ws_url(path)
             try:
-                async with websockets.connect(ws_url, extra_headers=headers) as ws:
+                async with websockets.connect(ws_url, additional_headers=headers) as ws:
                     async for message in ws:
                         if isinstance(message, bytes):
                             payload = message.decode("utf-8")
@@ -884,9 +890,9 @@ class SIEAsyncClient:
                         data = json.loads(payload)
                         yield data
                 return
-            except websockets.InvalidStatusCode as e:
+            except websockets.exceptions.InvalidStatus as e:
                 last_error = e
-                raise RequestError(f"WebSocket connection failed: {e.status_code}") from e
+                raise RequestError(f"WebSocket connection failed: {e.response.status_code}") from e
             except (websockets.WebSocketException, OSError, json.JSONDecodeError) as e:
                 last_error = e
                 raise SIEConnectionError(f"WebSocket error: {e}") from e
@@ -1004,7 +1010,11 @@ class SIEAsyncClient:
         wait_for_capacity: bool = False,
         provision_timeout_s: float | None = None,
     ) -> ScoreResult:
-        """Async version of score(). See SIEClient.score() for details."""
+        """Score items against a query using a reranker model.
+
+        Async version of :meth:`SIEClient.score`. See that method for full
+        parameter documentation.
+        """
         # Resolve defaults and pool
         pool_name, resolved_gpu = await self._resolve_pool_and_gpu(gpu)
         resolved_options = self._resolve_options(options)
