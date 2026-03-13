@@ -13,7 +13,7 @@ from sie_server.api.helpers import (
 )
 from sie_server.api.options import resolve_runtime_options
 from sie_server.api.serialization import MsgPackResponse
-from sie_server.api.validation import validate_extract_request, validate_machine_profile_header
+from sie_server.api.validation import validate_machine_profile_header
 from sie_server.core.inference_output import ExtractOutput
 from sie_server.core.prepared import ExtractPreparedItem
 from sie_server.core.timing import RequestTiming
@@ -23,6 +23,7 @@ from sie_server.observability.metrics import record_request
 from sie_server.observability.tracing import tracer
 from sie_server.types.inputs import Item
 from sie_server.types.openapi import ExtractResponseModel
+from sie_server.types.requests import ExtractRequest
 from sie_server.types.responses import (
     Classification,
     Entity,
@@ -120,7 +121,7 @@ async def _extract_via_worker(
         # GLiNER/GLiClass do their own tokenization
         prepared_items = []
         for i, item in enumerate(items):
-            text = item.get("text")
+            text = item.text
             char_count = len(text) if text else 0
             prepared = ExtractPreparedItem(
                 cost=char_count,
@@ -165,7 +166,7 @@ def _build_response(
     results = []
     for i, result in enumerate(extraction_results):
         # Get item ID (echo from request or generate)
-        item_id = items[i].get("id") if items[i].get("id") is not None else f"item-{i}"
+        item_id = items[i].id if items[i].id is not None else f"item-{i}"
 
         # Convert entity dicts to Entity objects
         entities = []
@@ -282,12 +283,10 @@ async def extract(
         if x_machine_profile:
             span.set_attribute("machine_profile", x_machine_profile)
 
-        # Parse request body (msgpack or JSON)
-        request = await RequestParser.parse(http_request, validate_extract_request)
+        request = await RequestParser.parse(http_request, ExtractRequest)
 
         # Set span attributes from request
-        items = request["items"]
-        span.set_attribute("batch_size", len(items))
+        span.set_attribute("batch_size", len(request.items))
 
         registry = http_request.app.state.registry
         device = registry.device
@@ -319,16 +318,18 @@ async def extract(
 
         # Get params and resolve runtime options (outside inference try/except
         # so ValueError from invalid profiles returns 400, not 500)
-        params = request.get("params") or {}
-        labels = params.get("labels")
-        output_schema = params.get("output_schema")
-        instruction = params.get("instruction")
+        params = request.params
+        labels = params.labels if params else None
+        output_schema = params.output_schema if params else None
+        instruction = params.instruction if params else None
 
-        options = resolve_runtime_options(config, params.get("options"), span)
+        options = resolve_runtime_options(config, params.options if params else None, span)
 
         # Request-level instruction takes precedence; fall back to profile instruction
         if instruction is None:
             instruction = options.get("instruction")
+
+        items = request.items
 
         # Extract using worker with batching
         error_handler = InferenceErrorHandler(model, "extract", span, ctx=ctx)

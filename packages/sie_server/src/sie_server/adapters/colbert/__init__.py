@@ -238,6 +238,14 @@ class ColBERTAdapter(ModelAdapter):
                 hidden_size,
                 self._actual_token_dim,
             )
+        elif self._token_dim < hidden_size:
+            # No projection layer but token_dim < hidden_size: Matryoshka truncation
+            self._actual_token_dim = self._token_dim
+            logger.info(
+                "No projection layer found, using Matryoshka truncation: %d -> %d",
+                hidden_size,
+                self._token_dim,
+            )
         else:
             # No projection layer, use hidden_size directly
             self._actual_token_dim = hidden_size
@@ -500,12 +508,12 @@ class ColBERTAdapter(ModelAdapter):
         # Get prefix token ID (for special tokens like [unused0])
         prefix_id = self._query_prefix_id if is_query else self._doc_prefix_id
 
-        if self._native_mode:
-            # Native mode: use model's forward pass with padding
-            multivectors = self._encode_native(texts, max_length, use_expansion, prefix_id)
-        else:
-            # Manual flash attention mode: use packed varlen sequences
+        if self._is_cuda and not self._native_mode:
+            # Manual flash attention mode: use packed varlen sequences (CUDA only)
             multivectors = self._encode_manual_flash(texts, max_length, use_expansion, prefix_id)
+        else:
+            # Native mode: use model's forward pass with padding (works on any device)
+            multivectors = self._encode_native(texts, max_length, use_expansion, prefix_id)
 
         return EncodeOutput(
             multivector=multivectors,
@@ -574,9 +582,11 @@ class ColBERTAdapter(ModelAdapter):
             outputs = self._model(**batch)
             hidden = outputs.last_hidden_state  # [batch, seq_len, hidden_size]
 
-            # Apply projection layer if present
+            # Apply projection layer if present, or Matryoshka truncation
             if self._linear is not None:
                 hidden = self._linear(hidden)
+            elif self._actual_token_dim is not None and self._actual_token_dim < hidden.shape[-1]:
+                hidden = hidden[:, :, : self._actual_token_dim]
 
             # L2 normalize
             if self._normalize:
@@ -984,10 +994,10 @@ class ColBERTAdapter(ModelAdapter):
         use_text_prefix = prefix and prefix_id is None
 
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             # Apply instruction if provided
             if instruction:

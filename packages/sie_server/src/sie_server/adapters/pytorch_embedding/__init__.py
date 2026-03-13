@@ -38,6 +38,7 @@ Example configurations:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -182,11 +183,14 @@ class PyTorchEmbeddingAdapter(PEFTLoRAMixin, ModelAdapter):
         # Determine padding side based on pooling strategy
         padding_side = "left" if self._pooling == "last_token" else "right"
 
+        hf_token = os.environ.get("HF_TOKEN")
+
         # Load tokenizer
         self._tokenizer = AutoTokenizer.from_pretrained(
             self._model_name_or_path,
             padding_side=padding_side,
             trust_remote_code=self._trust_remote_code,
+            token=hf_token,
         )
 
         # Load model with configured attention implementation
@@ -195,6 +199,7 @@ class PyTorchEmbeddingAdapter(PEFTLoRAMixin, ModelAdapter):
             torch_dtype=dtype,
             attn_implementation=attn_impl,
             trust_remote_code=self._trust_remote_code,
+            token=hf_token,
         )
         # Disable KV cache for models using the legacy transformers cache API
         if self._uses_legacy_transformers_cache:
@@ -211,9 +216,9 @@ class PyTorchEmbeddingAdapter(PEFTLoRAMixin, ModelAdapter):
         Returns:
             Tuple of (torch.dtype, attention_implementation string).
         """
-        # CPU should use FP32 and SDPA
+        # CPU should use FP32; respect explicit eager but default to SDPA
         if not device.startswith("cuda"):
-            return torch.float32, "sdpa"
+            return torch.float32, self._attn_implementation if self._attn_implementation == "eager" else "sdpa"
 
         # Map precision to dtype
         dtype_map = {
@@ -315,11 +320,16 @@ class PyTorchEmbeddingAdapter(PEFTLoRAMixin, ModelAdapter):
         # Forward pass
         with torch.inference_mode():
             outputs = self._model(**inputs, return_dict=True, **self._forward_kwargs)
-            last_hidden_state = outputs.last_hidden_state
-            attention_mask = inputs["attention_mask"]
 
-            # Apply pooling strategy
-            embeddings = self._apply_pooling(last_hidden_state, attention_mask, pooling=pooling)
+            # Handle models that return sentence_embeddings dict (e.g. NV-Embed-v2)
+            if isinstance(outputs, dict) and "sentence_embeddings" in outputs:
+                hidden_state = outputs["sentence_embeddings"]
+                attention_mask = inputs["attention_mask"]
+                embeddings = self._apply_pooling(hidden_state, attention_mask, pooling=pooling)
+            else:
+                last_hidden_state = outputs.last_hidden_state
+                attention_mask = inputs["attention_mask"]
+                embeddings = self._apply_pooling(last_hidden_state, attention_mask, pooling=pooling)
 
             # L2 normalize if configured
             if normalize:
@@ -397,10 +407,10 @@ class PyTorchEmbeddingAdapter(PEFTLoRAMixin, ModelAdapter):
         default_instruction = default_instruction if default_instruction is not None else self._default_instruction
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             if is_query and query_template:
                 # Use provided instruction or default

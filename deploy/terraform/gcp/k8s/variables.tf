@@ -269,7 +269,7 @@ variable "sie_router_image_tag" {
 }
 
 variable "sie_bundle" {
-  description = "SIE server bundle (default, florence2, sglang)"
+  description = "SIE server bundle (default)"
   type        = string
   default     = "default"
 }

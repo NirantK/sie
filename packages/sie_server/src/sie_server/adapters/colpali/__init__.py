@@ -321,20 +321,20 @@ class ColPaliAdapter(ModelAdapter):
             Numpy array of shape [num_tokens, 128].
         """
         # Item is a TypedDict (dict) - no instance check needed
-        has_text = item.get("text") is not None
-        has_images = item.get("images") is not None and len(item.get("images")) > 0
+        has_text = item.text is not None
+        has_images = item.images is not None and len(item.images) > 0
 
         if not has_text and not has_images:
             raise ValueError(_ERR_NO_INPUT)
 
         # For queries, prefer text; for documents, prefer images
         if is_query and has_text:
-            return self._encode_text(item["text"])
+            return self._encode_text(item.text)
         if has_images:
             pil_images = self._load_images(item)
             return self._encode_images(pil_images)
         if has_text:
-            return self._encode_text(item["text"])
+            return self._encode_text(item.text)
 
         raise ValueError(_ERR_NO_INPUT)
 
@@ -350,7 +350,7 @@ class ColPaliAdapter(ModelAdapter):
         from PIL import Image
 
         pil_images = []
-        for img_input in item.get("images") or []:
+        for img_input in item.images or []:
             img_bytes = img_input["data"]
             pil_img = Image.open(io.BytesIO(img_bytes))
             # Convert to RGB if necessary

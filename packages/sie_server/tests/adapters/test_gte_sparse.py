@@ -93,29 +93,6 @@ class TestGTESparseFlashAdapter:
         with pytest.raises(RuntimeError, match="Model not loaded"):
             _ = adapter.dims
 
-    def test_to_inference_output_empty_sparse(self, adapter: GTESparseFlashAdapter) -> None:
-        """Converting empty sparse dict produces valid output."""
-        sparse_results = [{}]  # Empty sparse dict
-        output = adapter._to_inference_output(sparse_results, batch_size=1, is_query=False)
-
-        assert output.batch_size == 1
-        assert output.sparse is not None
-        assert len(output.sparse) == 1
-        assert len(output.sparse[0].indices) == 0
-        assert len(output.sparse[0].values) == 0
-
-    def test_to_inference_output_with_values(self, adapter: GTESparseFlashAdapter) -> None:
-        """Converting sparse dict with values produces valid output."""
-        sparse_results = [{100: 0.5, 500: 0.3, 1000: 0.8}]
-        output = adapter._to_inference_output(sparse_results, batch_size=1, is_query=True)
-
-        assert output.batch_size == 1
-        assert output.is_query is True
-        assert output.sparse is not None
-        assert len(output.sparse) == 1
-        assert len(output.sparse[0].indices) == 3
-        assert len(output.sparse[0].values) == 3
-
     @patch("transformers.AutoModelForMaskedLM")
     @patch("transformers.AutoTokenizer")
     def test_load_wrong_architecture_raises(

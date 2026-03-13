@@ -147,19 +147,6 @@ class TestAdapterFactoryIntegration:
 
         assert type(adapter).__name__ == "SentenceTransformerDenseAdapter"
 
-    def test_xlm_roberta_flash_on_mps(self, tmp_path: Path) -> None:
-        """XLM-RoBERTa flash falls back on MPS."""
-        config = _make_config(
-            "test-xlm",
-            "intfloat/multilingual-e5-large",
-            "sie_server.adapters.xlm_roberta_flash:XLMRobertaFlashAdapter",
-            dense_dim=1024,
-        )
-
-        adapter = load_adapter(config, tmp_path, device="mps")
-
-        assert type(adapter).__name__ == "SentenceTransformerDenseAdapter"
-
     def test_bge_m3_flash_on_cpu(self, tmp_path: Path) -> None:
         """BGE-M3 flash falls back to BGEM3Adapter on CPU."""
         config = _make_config(
@@ -201,8 +188,8 @@ class TestAdapterFactoryIntegration:
 
         assert type(adapter).__name__ == "ColBERTAdapter"
 
-    def test_splade_flash_on_cpu_raises_error(self, tmp_path: Path) -> None:
-        """SPLADE flash raises error on CPU (no fallback available)."""
+    def test_splade_flash_on_cpu_returns_same_adapter(self, tmp_path: Path) -> None:
+        """SPLADE flash returns SPLADEFlashAdapter on CPU (uses SDPA fallback)."""
         config = _make_config(
             "test-splade",
             "naver/splade-v3",
@@ -210,8 +197,9 @@ class TestAdapterFactoryIntegration:
             sparse_dim=30522,
         )
 
-        with pytest.raises(RuntimeError, match="SPLADEFlashAdapter requires CUDA"):
-            load_adapter(config, tmp_path, device="cpu")
+        adapter = load_adapter(config, tmp_path, device="cpu")
+
+        assert type(adapter).__name__ == "SPLADEFlashAdapter"
 
     def test_bert_flash_cross_encoder_on_cuda_with_flash_attn(self, tmp_path: Path) -> None:
         """BERT flash cross-encoder returns flash adapter on CUDA when flash-attn is installed."""

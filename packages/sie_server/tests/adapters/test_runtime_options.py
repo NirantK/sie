@@ -696,7 +696,7 @@ class TestExtractRuntimeOptions:
         adapter._pipeline = mock_pipeline
         adapter._device = "cpu"
 
-        items = [{"text": "Great product!", "image": None}]
+        items = [Item(text="Great product!")]
         output = adapter.extract(items, labels=["positive", "negative"])
 
         # Classifications should be populated with correct data
@@ -745,7 +745,7 @@ class TestExtractRuntimeOptions:
         adapter._device = "cpu"
         adapter._entailment_idx = 0
 
-        items = [{"text": "Great product!", "image": None}]
+        items = [Item(text="Great product!")]
         output = adapter.extract(items, labels=["positive", "negative"])
 
         # Classifications should be populated
@@ -779,7 +779,7 @@ class TestExtractRuntimeOptions:
         adapter._pipeline = mock_pipeline
         adapter._device = "cpu"
 
-        items = [{"text": "Great product!", "image": None}]
+        items = [Item(text="Great product!")]
         output = adapter.extract(items, labels=["positive", "negative"])
 
         # Classifications should be populated

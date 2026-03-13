@@ -205,7 +205,7 @@ class WorkerRegistry:
 
         Args:
             gpu: Required GPU type (e.g., "l4", "a100-80gb").
-            bundle: Required bundle (e.g., "default", "sglang").
+            bundle: Required bundle (e.g., "default").
             model: Model name for affinity routing.
             worker_urls: If specified, only consider workers with these URLs
                 (used for pool-based routing).

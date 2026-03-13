@@ -103,14 +103,14 @@ resource "helm_release" "sie" {
 
         pools = {
           # Generate pool configs from expanded_worker_pools (gpu_pools × bundles)
-          # Each pool gets a unique name like "l4-spot-default" or "l4-spot-sglang"
+          # Each pool gets a unique name like "l4-spot-default"
           for pool_key, pool in local.expanded_worker_pools : pool.expanded_name => {
             enabled     = true
             minReplicas = pool.min_node_count
             maxReplicas = pool.max_node_count
             gpuType     = replace(pool.gpu_type, "nvidia-", "")
             # machineProfile uses ORIGINAL pool name (e.g., "l4-spot") for routing
-            # Router emits demand metrics with machine_profile="l4-spot", bundle="sglang"
+            # Router emits demand metrics with machine_profile="l4-spot", bundle="default"
             # KEDA queries on both labels to match the right pool
             machineProfile = pool.pool_name
             # Bundle for this worker pool (used by KEDA and worker --bundle flag)
@@ -330,7 +330,7 @@ locals {
 
   # Expand GPU pools × bundles into worker pool configs
   # Each (gpu_pool, bundle) pair becomes a separate worker StatefulSet
-  # Example: l4-spot × [default, sglang] → l4-spot-default, l4-spot-sglang
+  # Example: l4-spot × [default] → l4-spot-default
   expanded_worker_pools = merge([
     for pool in var.gpu_node_pools : {
       for bundle in local.effective_bundles :

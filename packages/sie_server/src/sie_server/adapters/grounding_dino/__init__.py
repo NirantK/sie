@@ -392,7 +392,7 @@ class GroundingDINOAdapter(ModelAdapter):
         Expects ImageInput format (SDK wire format with .data bytes).
         Returns None if no valid image.
         """
-        images = item.get("images")
+        images = item.images
         if not images:
             return None
 

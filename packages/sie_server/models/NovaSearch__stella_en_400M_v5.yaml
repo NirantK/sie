@@ -22,6 +22,12 @@ profiles:
     adapter_options:
       loadtime:
         uses_legacy_transformers_cache: true
+        config_kwargs:
+          use_memory_efficient_attention: false
+          unpad_inputs: false
       runtime:
         pooling: mean
         normalize: true
+        query_template: |-
+          Instruct: Given a web search query, retrieve relevant passages that answer the query.
+          Query: {text}

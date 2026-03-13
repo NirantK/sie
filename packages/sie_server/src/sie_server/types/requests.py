@@ -1,91 +1,56 @@
-"""Request types for SIE Server API.
+from typing import Any
 
-These types define the structure of API requests for encode, score, and extract endpoints.
-Using TypedDict for zero runtime overhead - validation is done manually where needed.
-"""
-
-from typing import Any, Literal, TypedDict
+import msgspec
 
 from sie_server.types.inputs import Item
 
-# Supported output types for encode endpoint
-OutputType = Literal["dense", "sparse", "multivector"]
-
-# Supported dtype for output
-DType = Literal["float32", "float16", "bfloat16", "int8", "uint8", "binary", "ubinary"]
+# -- Encode ------------------------------------------------------------------
 
 
-class EncodeParams(TypedDict, total=False):
-    """Parameters for encode requests.
-
-    Attributes:
-        output_types: Which output types to return: 'dense', 'sparse', 'multivector'.
-        instruction: Task instruction for instruction-tuned models.
-        output_dtype: Output dtype: 'float32', 'float16', 'int8', 'binary'.
-        options: Runtime options to override defaults.
-    """
-
-    output_types: list[OutputType]
-    instruction: str | None
-    output_dtype: DType | None
-    options: dict[str, Any] | None
+class EncodeParams(msgspec.Struct):
+    output_types: list[str] | None = None
+    output_dtype: str | None = None
+    instruction: str | None = None
+    options: dict[str, Any] | None = None
 
 
-class EncodeRequest(TypedDict, total=False):
-    """Request body for POST /v1/encode/{model}.
-
-    Attributes:
-        items: Items to encode (required, must be non-empty).
-        params: Encoding parameters.
-    """
-
+class EncodeRequest(msgspec.Struct):
     items: list[Item]
-    params: EncodeParams | None
+    params: EncodeParams | None = None
+
+    def __post_init__(self) -> None:
+        if not self.items:
+            raise msgspec.ValidationError("Field 'items' must not be empty")
 
 
-class ScoreRequest(TypedDict, total=False):
-    """Request body for POST /v1/score/{model}.
+# -- Score --------------------------------------------------------------------
 
-    Used for reranking: scores each item against the query.
 
-    Attributes:
-        query: Query item to score against (required).
-        items: Items to score (required, must be non-empty).
-        instruction: Task instruction for instruction-tuned rerankers.
-        options: Runtime options to override defaults.
-    """
-
+class ScoreRequest(msgspec.Struct):
     query: Item
     items: list[Item]
-    instruction: str | None
-    options: dict[str, Any] | None
+    instruction: str | None = None
+    options: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.items:
+            raise msgspec.ValidationError("Field 'items' must not be empty")
 
 
-class ExtractParams(TypedDict, total=False):
-    """Parameters for extract requests.
-
-    Attributes:
-        labels: Entity types for NER: ['person', 'organization', 'date'].
-        output_schema: JSON schema for structured extraction.
-        instruction: Task instruction for extraction.
-        options: Runtime options to override defaults.
-    """
-
-    labels: list[str] | None
-    output_schema: dict[str, Any] | None
-    instruction: str | None
-    options: dict[str, Any] | None
+# -- Extract ------------------------------------------------------------------
 
 
-class ExtractRequest(TypedDict, total=False):
-    """Request body for POST /v1/extract/{model}.
+class ExtractParams(msgspec.Struct):
+    labels: list[str] | None = None
+    output_schema: dict[str, Any] | None = None
+    instruction: str | None = None
+    options: dict[str, Any] | None = None
 
-    Used for NER and structured extraction.
 
-    Attributes:
-        items: Items to extract from (required, must be non-empty).
-        params: Extraction parameters.
-    """
-
+class ExtractRequest(msgspec.Struct):
     items: list[Item]
-    params: ExtractParams | None
+    params: ExtractParams | None = None
+
+    def __post_init__(self) -> None:
+        if not self.items:
+            raise msgspec.ValidationError("Field 'items' must not be empty")

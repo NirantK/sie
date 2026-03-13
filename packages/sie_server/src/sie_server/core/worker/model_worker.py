@@ -96,11 +96,14 @@ class ModelWorker:
         self._postprocessor_registry = postprocessor_registry
 
         # Initialize operation handlers (dependency injection point)
-        self._handlers: dict[str, OperationHandler[Any]] = handlers or {
-            "encode": EncodeHandler(model_name, postprocessor_registry),
-            "extract": ExtractHandler(),
-            "score": ScoreHandler(),
-        }
+        if handlers is not None:
+            self._handlers: dict[str, OperationHandler[Any]] = handlers
+        else:
+            self._handlers = {
+                "encode": EncodeHandler(model_name, postprocessor_registry),
+                "extract": ExtractHandler(),
+                "score": ScoreHandler(),
+            }
 
         # Batch config used for all batchers
         self._batch_config = BatchConfig(

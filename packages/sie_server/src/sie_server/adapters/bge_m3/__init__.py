@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
+from huggingface_hub import snapshot_download
 from torch import nn
 from torch.nn import functional
 
@@ -165,7 +166,11 @@ class BGEM3Adapter(ModelAdapter):
         BGE-M3 has additional linear layers for multi-vector and sparse outputs.
         """
         hidden_size = self._model.config.hidden_size  # type: ignore[union-attr]
+
+        # Resolve the actual directory: could be a local path or HF model ID
         base_path = Path(model_path)
+        if not base_path.is_dir():
+            base_path = Path(snapshot_download(model_path))
 
         # ColBERT linear: hidden_size -> hidden_size (1024 -> 1024)
         colbert_path = base_path / "colbert_linear.pt"
@@ -176,7 +181,7 @@ class BGEM3Adapter(ModelAdapter):
             self._colbert_linear.to(device=device, dtype=dtype)
             self._colbert_linear.eval()
         else:
-            logger.warning("colbert_linear.pt not found at %s", model_path)
+            logger.warning("colbert_linear.pt not found at %s", base_path)
 
         # Sparse linear: hidden_size -> 1 (for token weights)
         sparse_path = base_path / "sparse_linear.pt"
@@ -187,7 +192,7 @@ class BGEM3Adapter(ModelAdapter):
             self._sparse_linear.to(device=device, dtype=dtype)
             self._sparse_linear.eval()
         else:
-            logger.warning("sparse_linear.pt not found at %s", model_path)
+            logger.warning("sparse_linear.pt not found at %s", base_path)
 
     def unload(self) -> None:
         """Unload the model and free resources."""
@@ -288,9 +293,9 @@ class BGEM3Adapter(ModelAdapter):
         """Extract texts from items, optionally prepending instruction."""
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
-            text = item["text"]
+            text = item.text
             if instruction is not None:
                 text = f"{instruction} {text}"
             texts.append(text)

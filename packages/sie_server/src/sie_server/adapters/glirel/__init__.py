@@ -260,13 +260,13 @@ class GLiRELAdapter(ModelAdapter):
 
     def _extract_text(self, item: Item) -> str:
         """Extract text from an item."""
-        if item.get("text") is None:
+        if item.text is None:
             raise ValueError(_ERR_REQUIRES_TEXT)
-        return item["text"]
+        return item.text
 
     def _extract_entities(self, item: Item) -> list[dict[str, Any]]:
         """Extract entities from item metadata."""
-        metadata = item.get("metadata")
+        metadata = item.metadata
         if metadata is None:
             return []
         return metadata.get("entities", [])

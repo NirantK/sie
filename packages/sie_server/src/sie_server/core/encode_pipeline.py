@@ -84,10 +84,8 @@ class EncodePipeline:
         """
         preprocessor_registry = registry.preprocessor_registry
         has_image_input = config.inputs is not None and config.inputs.image
-        all_items_have_text = all(item.get("text") is not None for item in items)
-        any_items_have_images = any(
-            item.get("images") is not None and len(item.get("images", [])) > 0 for item in items
-        )
+        all_items_have_text = all(item.text is not None for item in items)
+        any_items_have_images = any(item.images is not None and len(item.images) > 0 for item in items)
 
         # Text-only path: use text preprocessor
         if preprocessor_registry.has_preprocessor(model, "text") and all_items_have_text and not any_items_have_images:
@@ -105,7 +103,7 @@ class EncodePipeline:
                 # Fallback: create passthrough prepared items for images
                 prepared_items = []
                 for i, item in enumerate(items):
-                    images = item.get("images")
+                    images = item.images
                     image_count = len(images) if images else 1
                     prepared = PreparedItem(
                         payload=ImagePayload(pixel_values=None, original_size=(0, 0)),

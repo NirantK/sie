@@ -472,7 +472,7 @@ variable "sie_router_image_tag" {
 }
 
 variable "sie_bundle" {
-  description = "SIE server bundle (default, florence2, sglang). Deprecated: use sie_bundles instead."
+  description = "SIE server bundle (default). Deprecated: use sie_bundles instead."
   type        = string
   default     = "default"
 }
@@ -481,11 +481,9 @@ variable "sie_bundles" {
   description = "List of SIE server bundles to deploy. Creates worker pools for each (gpu_pool × bundle) combination. If empty, falls back to sie_bundle."
   type        = list(string)
   default     = []
-  # Example: ["default", "sglang", "florence2"]
+  # Example: ["default"]
   # With gpu_node_pools = [{name = "l4-spot", ...}], this creates:
   #   - l4-spot-default (workers with bundle=default)
-  #   - l4-spot-sglang (workers with bundle=sglang)
-  #   - l4-spot-florence2 (workers with bundle=florence2)
 }
 
 variable "sie_router_replicas" {

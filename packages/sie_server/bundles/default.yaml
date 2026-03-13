@@ -29,6 +29,11 @@ adapters:
 - sie_server.adapters.xlm_roberta_flash
 - sie_server.adapters.nli_classification
 - sie_server.adapters.nli_classification_flash
+- sie_server.adapters.gliner
+- sie_server.adapters.glirel
+- sie_server.adapters.gliclass
+- sie_server.adapters.donut
+- sie_server.adapters.florence2
 deps:
   # Most flash adapters; sentence_transformer needs >=4.57
   transformers: '>=4.57'
@@ -46,6 +51,16 @@ deps:
   pillow: ''
   # grounding_dino
   requests: ''
+  # gliner
+  gliner: '>=0.2,<1'
+  # glirel
+  glirel: '>=1.0,<2'
+  # gliclass
+  gliclass: '>=0.1,<1'
+  # gliner/glirel/gliclass shared dep
+  loguru: '>=0.7,<1'
+  # donut, florence2
+  timm: '>=0.9.0,<1.0'
   # Flash Attention 2 — CUDA only, prebuilt wheel
   flash-attn:
     url: https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.7.4+cu128torch2.9-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl

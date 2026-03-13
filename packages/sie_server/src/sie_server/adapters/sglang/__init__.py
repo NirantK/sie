@@ -541,10 +541,10 @@ class SGLangEmbeddingAdapter(ModelAdapter):
         default_instruction = default_instruction if default_instruction is not None else self._default_instruction
         texts = []
         for item in items:
-            if item.get("text") is None:
+            if item.text is None:
                 raise ValueError(_ERR_REQUIRES_TEXT)
 
-            text = item["text"]
+            text = item.text
 
             if is_query and query_template:
                 # Use provided instruction or default

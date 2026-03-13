@@ -211,8 +211,8 @@ class PreprocessorRegistry:
             ValueError: If items contain unsupported modalities.
         """
         # Determine required modality based on items
-        has_text = any(item.get("text") is not None for item in items)
-        has_images = any(item.get("images") for item in items)  # Truthy if non-empty list
+        has_text = any(item.text is not None for item in items)
+        has_images = any(item.images for item in items)  # Truthy if non-empty list
 
         # Select preprocessor based on content
         # Priority: images > text (matching current adapter behavior for CLIP/SigLIP)
@@ -267,8 +267,8 @@ class PreprocessorRegistry:
             PreparedBatch ready for batching and inference.
         """
         # Determine required modality based on items
-        has_text = any(item.get("text") is not None for item in items)
-        has_images = any(item.get("images") for item in items)  # Truthy if non-empty list
+        has_text = any(item.text is not None for item in items)
+        has_images = any(item.images for item in items)  # Truthy if non-empty list
 
         if has_images:
             modality = "image"

@@ -159,19 +159,30 @@ class SentenceTransformerDenseAdapter(ModelAdapter):
             msg = f"Unsupported output types: {unsupported}. This model only supports 'dense'."
             raise ValueError(msg)
 
+        # Resolve runtime options (query_template / doc_template)
+        opts = options or {}
+        query_template = opts.get("query_template")
+        doc_template = opts.get("doc_template")
+
         texts = [self._extract_text(item) for item in items]
 
-        # Determine prompt_name based on is_query and model's available prompts
-        prompt_name = None
-        if self._model.prompts:
-            if is_query and "query" in self._model.prompts:
-                prompt_name = "query"
-            elif not is_query and "document" in self._model.prompts:
-                prompt_name = "document"
+        # Apply query/doc template from runtime options if provided
+        template = query_template if is_query else doc_template
+        if template:
+            texts = [template.format(text=text, instruction=instruction or "") for text in texts]
+            prompt_name = None
+        else:
+            # Determine prompt_name based on is_query and model's available prompts
+            prompt_name = None
+            if self._model.prompts:
+                if is_query and "query" in self._model.prompts:
+                    prompt_name = "query"
+                elif not is_query and "document" in self._model.prompts:
+                    prompt_name = "document"
 
-        # If instruction is provided explicitly, prepend it (fallback for models without prompts)
-        if instruction is not None and prompt_name is None:
-            texts = [f"{instruction} {text}" for text in texts]
+            # If instruction is provided explicitly, prepend it (fallback for models without prompts)
+            if instruction is not None and prompt_name is None:
+                texts = [f"{instruction} {text}" for text in texts]
 
         with torch.inference_mode():
             embeddings: np.ndarray = self._model.encode(
@@ -191,9 +202,9 @@ class SentenceTransformerDenseAdapter(ModelAdapter):
 
     def _extract_text(self, item: Item) -> str:
         """Extract text from an item."""
-        if item.get("text") is None:
+        if item.text is None:
             raise ValueError(_ERR_REQUIRES_TEXT)
-        return item["text"]
+        return item.text
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""
@@ -365,9 +376,9 @@ class SentenceTransformerSparseAdapter(ModelAdapter):
 
     def _extract_text(self, item: Item) -> str:
         """Extract text from an item."""
-        if item.get("text") is None:
+        if item.text is None:
             raise ValueError(_ERR_REQUIRES_TEXT)
-        return item["text"]
+        return item.text
 
     def get_preprocessor(self) -> CharCountPreprocessor:
         """Return CharCountPreprocessor for cost estimation without tokenization overhead."""
