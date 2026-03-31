@@ -37,21 +37,31 @@ Metrics are calculated against both the single ground-truth label and the `poten
 
 ### Zero-Shot NLI Classification
 
+![Zero-Shot NLI Classification](assets/diagram-nli.svg)
+
 Use NLI models via `sie.extract()` to score each candidate category as a natural language hypothesis. No training data needed. Serves as the baseline, but scales poorly with large label spaces.
 
 ### Text Embedding Retrieval
+
+![Text Embedding Retrieval](assets/diagram-text-retrieval.svg)
 
 Embed category names and product titles with text embedding models via `sie.encode()`. Index category embeddings in a vector store (e.g. Qdrant). At query time, retrieve the nearest categories by cosine similarity. All text embedding models available in SIE are evaluated.
 
 ### Image Embedding Retrieval
 
+![Image Embedding Retrieval](assets/diagram-image-retrieval.svg)
+
 Embed product images and category names using vision models via `sie.encode()`. Predict categories from product images alone — tests whether visual signal is sufficient for taxonomy classification. All vision models available in SIE are evaluated.
 
 ### Multi-Modal Retrieval
 
+![Multi-Modal Retrieval](assets/diagram-multi-modal.svg)
+
 Use both product title and image to predict categories. A simple approach: run text and image retrieval independently and combine the candidate sets. Models that natively handle both modalities (e.g. CLIP-family) can also encode text and images into the same vector space.
 
 ### Retrieval + Reranking
+
+![Retrieval + Reranking](assets/diagram-reranking.svg)
 
 Two-stage pipeline: retrieve top-K candidates using the best embedding approach, then rerank with cross-encoder models via `sie.score()`. Tests whether fine-grained pairwise scoring can improve upon retrieval alone. All cross-encoder rerankers available in SIE are evaluated.
 
