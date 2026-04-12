@@ -25,13 +25,12 @@ import sys
 import time
 from pathlib import Path
 
+import maxsim_cpu
 import numpy as np
 import polars as pl
 from dotenv import load_dotenv
 from loguru import logger
 from sie_sdk import SIEAsyncClient
-import maxsim_cpu
-
 from turbopuffer import AsyncTurbopuffer
 
 load_dotenv()
@@ -48,29 +47,32 @@ TPUF_API_KEY = os.environ["TURBOPUFFER_API_KEY"]
 DEFAULT_GPU = "l4-spot"
 PROVISION_TIMEOUT = 900
 RANDOM_SEED = 42
+MAX_TRANSPORT_RETRIES = 3
 
 ENCODE_BATCH_SIZE = 64
 MV_ENCODE_BATCH_SIZE = 16
-
 TPUF_BATCH_SIZE = 500
 TOP_K_RETRIEVE = 25
 TOP_K_EVAL = 10
 RRF_K = 60
 CHECKPOINT_INTERVAL = 100
+# SDK retries 503 internally; keep concurrent requests low to avoid thundering herd
+GPU_CONCURRENCY = 10
 
 ENCODER = "BAAI/bge-m3"
 NS_NAME = "ablation-bge-m3-v2"
 
-# Focused: 1 CE reranker, 1 MV model. Queue rest later.
-CROSS_ENCODER_RERANKERS = ["mixedbread-ai/mxbai-rerank-base-v2"]
+CROSS_ENCODER_RERANKERS = [
+    "mixedbread-ai/mxbai-rerank-base-v2",
+    "BAAI/bge-reranker-v2-m3",
+]
 MULTIVECTOR_RERANKERS = [
+    {"model": "BAAI/bge-m3", "dim": 1024, "max_tokens": 8192},
     {"model": "mixedbread-ai/mxbai-colbert-large-v1", "dim": 128, "max_tokens": 512},
 ]
 
 CACHE_DIR = Path("cache/ablation")
 RESULTS_CSV = Path("ablation_results.csv")
-
-GPU_SEMAPHORE: asyncio.Semaphore
 
 
 # ── Caching ────────────────────────────────────────────────────────────────
@@ -92,8 +94,7 @@ class NpzCache:
 
     def load_multivector(self) -> list:
         data = np.load(self.path, allow_pickle=False)
-        count = len([k for k in data.files if k.startswith("mv_")])
-        return [data[f"mv_{i}"] for i in range(count)]
+        return [data[f"mv_{i}"] for i in range(len(data.files))]
 
     def save_multivector(self, mvs: list):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,9 +134,7 @@ def slugify(name: str) -> str:
 
 def build_hybrid_pool(bm25_ranked, vec_ranked):
     """Union of BM25 top-K + Vector top-K, deduplicated, order preserved."""
-    return list(dict.fromkeys(
-        bm25_ranked[:TOP_K_RETRIEVE] + vec_ranked[:TOP_K_RETRIEVE]
-    ))
+    return list(dict.fromkeys(bm25_ranked[:TOP_K_RETRIEVE] + vec_ranked[:TOP_K_RETRIEVE]))
 
 
 # ── Metrics ─────────────────────────────────────────────────────────────────
@@ -203,8 +202,9 @@ def write_results_csv(results_log, path):
 def append_result(results_log, result):
     results_log.append(result)
     write_results_csv(results_log, RESULTS_CSV)
-    logger.info(f"  → {result.get('condition')}: NDCG@10={result.get('ndcg@10')} "
-                f"[{len(results_log)} results in {RESULTS_CSV}]")
+    logger.info(
+        f"  -> {result.get('condition')}: NDCG@10={result.get('ndcg@10')} [{len(results_log)} results in {RESULTS_CSV}]"
+    )
 
 
 def print_summary(results_log):
@@ -218,7 +218,7 @@ def print_summary(results_log):
         logger.info(
             f"{r.get('condition_num', ''):<4} "
             f"{r.get('condition', ''):<25} "
-            f"{r.get('reranker', '—'):<42} "
+            f"{r.get('reranker', '-'):<42} "
             f"{r.get('ndcg@10', 0):>8.4f} "
             f"{r.get('mrr@10', 0):>8.4f} "
             f"{r.get('recall@10', 0):>10.4f}"
@@ -231,6 +231,7 @@ def print_summary(results_log):
 
 def load_dataset():
     from datasets import load_dataset as hf_load
+
     t0 = time.perf_counter()
     corpus = pl.from_arrow(hf_load("vidore/vidore_v3_finance_en", "corpus", split="test").data.table)
     queries = pl.from_arrow(hf_load("vidore/vidore_v3_finance_en", "queries", split="test").data.table)
@@ -246,47 +247,61 @@ def load_dataset():
         text = row["markdown"] or ""
         if len(text.strip()) < 10:
             text = f"Page {row['page_number_in_doc']} of {row['doc_id']}"
-        corpus_items.append({
-            "corpus_id": row["corpus_id"],
-            "text": text,
-            "doc_id": row["doc_id"],
-            "page_number": row["page_number_in_doc"],
-        })
+        corpus_items.append(
+            {
+                "corpus_id": row["corpus_id"],
+                "text": text,
+                "doc_id": row["doc_id"],
+                "page_number": row["page_number_in_doc"],
+            }
+        )
 
     query_items = [{"query_id": r["query_id"], "text": r["query"]} for r in queries.iter_rows(named=True)]
-    logger.info(f"Corpus: {len(corpus_items)}, Queries: {len(query_items)}, "
-                f"Qrels: {sum(len(v) for v in qrel_map.values())}")
+    logger.info(
+        f"Corpus: {len(corpus_items)}, Queries: {len(query_items)}, Qrels: {sum(len(v) for v in qrel_map.values())}"
+    )
     return corpus_items, query_items, qrel_map
 
 
-# ── Async Encode ────────────────────────────────────────────────────────────
+# ── Async Encode (SDK handles 503 retries; we retry transport errors) ──────
 
 
-async def encode_dense(sie, model, texts, is_query, gpu, cache_path=None):
+async def _encode_with_retry(sie, semaphore, model, batch, output_types, is_query, gpu):
+    for attempt in range(MAX_TRANSPORT_RETRIES):
+        try:
+            async with semaphore:
+                return await sie.encode(
+                    model,
+                    batch,
+                    output_types=output_types,
+                    is_query=is_query,
+                    gpu=gpu,
+                    wait_for_capacity=True,
+                    provision_timeout_s=PROVISION_TIMEOUT,
+                )
+        except Exception as e:
+            logger.warning(f"  Encode error (attempt {attempt + 1}/{MAX_TRANSPORT_RETRIES}, {type(e).__name__}): {e}")
+            await asyncio.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"Encode failed after {MAX_TRANSPORT_RETRIES} retries")
+
+
+async def encode_dense(sie, model, texts, is_query, gpu, semaphore, cache_path=None):
     cache = NpzCache(cache_path)
     if cache.exists():
         logger.info(f"Cache hit: {cache_path}")
         return cache.load_dense()
 
-    batches = [texts[i:i + ENCODE_BATCH_SIZE] for i in range(0, len(texts), ENCODE_BATCH_SIZE)]
+    batches = [texts[i : i + ENCODE_BATCH_SIZE] for i in range(0, len(texts), ENCODE_BATCH_SIZE)]
     done = 0
 
     async def do_one(batch_texts):
         nonlocal done
         batch = [{"text": t} for t in batch_texts]
-        for attempt in range(3):
-            try:
-                async with GPU_SEMAPHORE:
-                    result = await sie.encode(model, batch, output_types=["dense"], is_query=is_query,
-                                              gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
-                    done += 1
-                    if done % 5 == 0 or done == len(batches):
-                        logger.info(f"  Dense encode: {done}/{len(batches)} batches")
-                    return result
-            except Exception as e:
-                logger.warning(f"  Encode error (attempt {attempt + 1}/3, {type(e).__name__}): {e}")
-                await asyncio.sleep(5 * (attempt + 1))
-        raise RuntimeError("Dense encode failed after 3 retries")
+        result = await _encode_with_retry(sie, semaphore, model, batch, ["dense"], is_query, gpu)
+        done += 1
+        if done % 5 == 0 or done == len(batches):
+            logger.info(f"  Dense encode: {done}/{len(batches)} batches")
+        return result
 
     results_list = await asyncio.gather(*[do_one(b) for b in batches])
     all_vectors = []
@@ -299,31 +314,23 @@ async def encode_dense(sie, model, texts, is_query, gpu, cache_path=None):
     return all_vectors
 
 
-async def encode_multivector(sie, model, texts, is_query, gpu, cache_path=None):
+async def encode_multivector(sie, model, texts, is_query, gpu, semaphore, cache_path=None):
     cache = NpzCache(cache_path)
     if cache.exists():
         logger.info(f"Cache hit: {cache_path}")
         return cache.load_multivector()
 
-    batches = [texts[i:i + MV_ENCODE_BATCH_SIZE] for i in range(0, len(texts), MV_ENCODE_BATCH_SIZE)]
+    batches = [texts[i : i + MV_ENCODE_BATCH_SIZE] for i in range(0, len(texts), MV_ENCODE_BATCH_SIZE)]
     done = 0
 
     async def do_one(batch_texts):
         nonlocal done
         batch = [{"text": t} for t in batch_texts]
-        for attempt in range(3):
-            try:
-                async with GPU_SEMAPHORE:
-                    result = await sie.encode(model, batch, output_types=["multivector"], is_query=is_query,
-                                              gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
-                    done += 1
-                    if done % 10 == 0 or done == len(batches):
-                        logger.info(f"  MV encode ({model}): {done}/{len(batches)} batches")
-                    return result
-            except Exception as e:
-                logger.warning(f"  MV encode error (attempt {attempt + 1}/3, {type(e).__name__}): {e}")
-                await asyncio.sleep(5 * (attempt + 1))
-        raise RuntimeError(f"MV encode failed after 3 retries")
+        result = await _encode_with_retry(sie, semaphore, model, batch, ["multivector"], is_query, gpu)
+        done += 1
+        if done % 10 == 0 or done == len(batches):
+            logger.info(f"  MV encode ({model}): {done}/{len(batches)} batches")
+        return result
 
     results_list = await asyncio.gather(*[do_one(b) for b in batches])
     all_mvs = []
@@ -399,7 +406,7 @@ async def search_vector(tpuf, ns_name, query_vectors, cache_path=None):
 # ── Cross-Encoder Reranking with partial cache ─────────────────────────────
 
 
-async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text_map, gpu, cache_path=None):
+async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text_map, gpu, semaphore, cache_path=None):
     cache = JsonCache(cache_path)
     if cache.exists():
         logger.info(f"Cache hit: {cache_path}")
@@ -408,39 +415,47 @@ async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text
     n = len(query_texts)
     partial_path = cache_path.with_suffix(".partial.json") if cache_path else None
 
-    # Resume from partial checkpoint
     results = [None] * n
+    done = 0
     if partial_path and partial_path.exists():
-        partial = json.load(open(partial_path))
+        with open(partial_path) as f:
+            partial = json.load(f)
         for i, r in enumerate(partial):
             if r is not None:
                 results[i] = r
         done = sum(1 for r in results if r is not None)
         logger.info(f"  CE {model}: resumed {done}/{n} from checkpoint")
-    else:
-        done = 0
 
     remaining = [i for i in range(n) if results[i] is None]
     logger.info(f"  CE {model}: {len(remaining)} queries to score ({len(candidate_ids_list[0])} candidates/query)")
 
     async def score_one(idx):
-        """Score one query. SDK handles 503 retries. We retry on transport errors."""
         cands = candidate_ids_list[idx]
         if not cands:
             return idx, []
         items = [{"text": text_map.get(cid, "")} for cid in cands]
-        for attempt in range(3):
+        for attempt in range(MAX_TRANSPORT_RETRIES):
             try:
-                async with GPU_SEMAPHORE:
-                    result = await sie.score(model, query={"text": query_texts[idx]}, items=items, gpu=gpu,
-                                             wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
-                    scored = sorted([(cands[int(s["item_id"].split("-")[1])], s["score"]) for s in result["scores"]],
-                                    key=lambda x: x[1], reverse=True)
+                async with semaphore:
+                    result = await sie.score(
+                        model,
+                        query={"text": query_texts[idx]},
+                        items=items,
+                        gpu=gpu,
+                        wait_for_capacity=True,
+                        provision_timeout_s=PROVISION_TIMEOUT,
+                    )
+                    # item_id = original index ("item-N" -> N), rank = output position
+                    scored = sorted(
+                        [(cands[int(s["item_id"].split("-")[1])], s["score"]) for s in result["scores"]],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )
                     return idx, [cid for cid, _ in scored]
             except Exception as e:
-                logger.warning(f"  CE error (attempt {attempt + 1}/3, {type(e).__name__}): {e}")
+                logger.warning(f"  CE error (attempt {attempt + 1}/{MAX_TRANSPORT_RETRIES}, {type(e).__name__}): {e}")
                 await asyncio.sleep(5 * (attempt + 1))
-        raise RuntimeError(f"CE score failed after 3 transport retries for query {idx}")
+        raise RuntimeError(f"CE score failed after {MAX_TRANSPORT_RETRIES} retries for query {idx}")
 
     completed = done
     for coro in asyncio.as_completed([score_one(i) for i in remaining]):
@@ -451,7 +466,8 @@ async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text
         if completed % CHECKPOINT_INTERVAL == 0:
             if partial_path:
                 partial_path.parent.mkdir(parents=True, exist_ok=True)
-                json.dump(results, open(partial_path, "w"))
+                with open(partial_path, "w") as f:
+                    json.dump(results, f)
             logger.info(f"  CE {model}: {completed}/{n} (checkpoint)")
         elif completed % 200 == 0:
             logger.info(f"  CE {model}: {completed}/{n}")
@@ -464,10 +480,11 @@ async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text
     return results
 
 
-# ── Multi-Vector Reranking (CPU) ───────────────────────────────────────────
+# ── Multi-Vector Scoring (CPU, maxsim_cpu) ─────────────────────────────────
 
 
-def rerank_multivector(query_mvs, corpus_mv_map, candidate_ids_list, cache_path=None):
+def rerank_multivector(query_mvs, normed_corpus_mv_map, candidate_ids_list, cache_path=None):
+    """Rerank hybrid pool candidates using pre-normalized corpus multivectors."""
     cache = JsonCache(cache_path)
     if cache.exists():
         logger.info(f"Cache hit: {cache_path}")
@@ -478,7 +495,7 @@ def rerank_multivector(query_mvs, corpus_mv_map, candidate_ids_list, cache_path=
         if not cand_ids:
             all_reranked.append([])
             continue
-        doc_mvs = [normalize_mv(corpus_mv_map[cid]) for cid in cand_ids]
+        doc_mvs = [normed_corpus_mv_map[cid] for cid in cand_ids]
         scores = maxsim_cpu.maxsim_scores_variable(normalize_mv(q_mv), doc_mvs)
         scored = sorted(zip(cand_ids, scores), key=lambda x: x[1], reverse=True)
         all_reranked.append([cid for cid, _ in scored])
@@ -491,18 +508,16 @@ def rerank_multivector(query_mvs, corpus_mv_map, candidate_ids_list, cache_path=
     return all_reranked
 
 
-def retrieve_multivector(query_mvs, corpus_ids, corpus_mvs, cache_path=None):
+def retrieve_multivector(query_mvs, corpus_ids, normed_corpus_mvs, cache_path=None):
+    """Brute-force MaxSim over pre-normalized corpus multivectors."""
     cache = JsonCache(cache_path)
     if cache.exists():
         logger.info(f"Cache hit: {cache_path}")
         return cache.load()
 
-    normed_corpus = [normalize_mv(mv) for mv in corpus_mvs]
-    logger.info(f"  MV direct: normalized {len(normed_corpus)} corpus vectors")
-
     all_ranked = []
     for i, q_mv in enumerate(query_mvs):
-        scores = maxsim_cpu.maxsim_scores_variable(normalize_mv(q_mv), normed_corpus)
+        scores = maxsim_cpu.maxsim_scores_variable(normalize_mv(q_mv), normed_corpus_mvs)
         scored = sorted(zip(corpus_ids, scores), key=lambda x: x[1], reverse=True)
         all_ranked.append([cid for cid, _ in scored])
         if (i + 1) % 100 == 0:
@@ -528,8 +543,7 @@ async def main():
     run_mv_rerank = 5 not in skip
     run_mv_direct = 6 not in skip
 
-    global GPU_SEMAPHORE
-    GPU_SEMAPHORE = asyncio.Semaphore(10)  # Low — SDK retries 503 internally, too many concurrent = storm
+    semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
 
     np.random.seed(RANDOM_SEED)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -537,7 +551,6 @@ async def main():
     async with SIEAsyncClient(SIE_BASE_URL, api_key=SIE_API_KEY, timeout_s=900) as sie:
         tpuf = AsyncTurbopuffer(api_key=TPUF_API_KEY, region="aws-us-east-1")
 
-        # ── Load dataset ────────────────────────────────────────────
         corpus_items, query_items, qrel_map = load_dataset()
         text_map = {item["corpus_id"]: item["text"] for item in corpus_items}
         corpus_texts = [item["text"] for item in corpus_items]
@@ -551,47 +564,61 @@ async def main():
         logger.info("\n=== PHASE 1: Dense encode + index ===")
         t0 = time.perf_counter()
 
-        corpus_vecs = await encode_dense(sie, ENCODER, corpus_texts, is_query=False, gpu=gpu,
-                                         cache_path=CACHE_DIR / "dense_corpus.npz")
+        corpus_vecs = await encode_dense(
+            sie,
+            ENCODER,
+            corpus_texts,
+            is_query=False,
+            gpu=gpu,
+            semaphore=semaphore,
+            cache_path=CACHE_DIR / "dense_corpus.npz",
+        )
         _, query_vecs = await asyncio.gather(
             index_corpus(tpuf, corpus_items, corpus_vecs, NS_NAME),
-            encode_dense(sie, ENCODER, query_texts, is_query=True, gpu=gpu,
-                         cache_path=CACHE_DIR / "dense_query.npz"),
+            encode_dense(
+                sie,
+                ENCODER,
+                query_texts,
+                is_query=True,
+                gpu=gpu,
+                semaphore=semaphore,
+                cache_path=CACHE_DIR / "dense_query.npz",
+            ),
         )
         logger.info(f"Phase 1: {time.perf_counter() - t0:.1f}s")
 
-        # ── Phase 2: Search (BM25 + Vector parallel) ──────────────
-        logger.info("\n=== PHASE 2: Search (top-{TOP_K_RETRIEVE}) ===")
+        # ── Phase 2: Search ────────────────────────────────────────
+        logger.info(f"\n=== PHASE 2: Search (top-{TOP_K_RETRIEVE}) ===")
         t0 = time.perf_counter()
 
         bm25_results, vec_results = await asyncio.gather(
-            search_bm25(tpuf, NS_NAME, query_texts,
-                        cache_path=CACHE_DIR / f"bm25_top{TOP_K_RETRIEVE}.json"),
-            search_vector(tpuf, NS_NAME, query_vecs,
-                          cache_path=CACHE_DIR / f"vector_top{TOP_K_RETRIEVE}.json"),
+            search_bm25(tpuf, NS_NAME, query_texts, cache_path=CACHE_DIR / f"bm25_top{TOP_K_RETRIEVE}.json"),
+            search_vector(tpuf, NS_NAME, query_vecs, cache_path=CACHE_DIR / f"vector_top{TOP_K_RETRIEVE}.json"),
         )
         logger.info(f"Phase 2: {time.perf_counter() - t0:.1f}s")
 
-        # ── Eval conditions 1-3 (write immediately) ────────────────
+        # ── Eval conditions 1-3 ────────────────────────────────────
         if 1 not in skip:
             m = evaluate(bm25_results, query_items, qrel_map)
-            append_result(results_log, {"condition_num": 1, "condition": "BM25-only", "reranker": "—", **m})
+            append_result(results_log, {"condition_num": 1, "condition": "BM25-only", "reranker": "-", **m})
 
         if 2 not in skip:
             m = evaluate(vec_results, query_items, qrel_map)
-            append_result(results_log, {"condition_num": 2, "condition": "Vector-only", "reranker": "—", **m})
+            append_result(results_log, {"condition_num": 2, "condition": "Vector-only", "reranker": "-", **m})
 
         if 3 not in skip:
             rrf_results = [rrf_fuse([b, v]) for b, v in zip(bm25_results, vec_results)]
             m = evaluate(rrf_results, query_items, qrel_map)
-            append_result(results_log, {"condition_num": 3, "condition": "RRF(BM25+Vec)", "reranker": "—", **m})
+            append_result(results_log, {"condition_num": 3, "condition": "RRF(BM25+Vec)", "reranker": "-", **m})
 
-        # ── Build hybrid pool: union(BM25 top-25, Vector top-25) ──
+        # ── Build hybrid pool ──────────────────────────────────────
         hybrid_pools = [build_hybrid_pool(b, v) for b, v in zip(bm25_results, vec_results)]
         pool_sizes = [len(p) for p in hybrid_pools]
-        logger.info(f"Hybrid pool: mean={np.mean(pool_sizes):.0f}, min={min(pool_sizes)}, max={max(pool_sizes)} candidates")
+        logger.info(
+            f"Hybrid pool: mean={np.mean(pool_sizes):.0f}, min={min(pool_sizes)}, max={max(pool_sizes)} candidates"
+        )
 
-        # ── Phase 3: Reranking experiments (parallel) ──────────────
+        # ── Phase 3: Reranking experiments ─────────────────────────
         logger.info("\n=== PHASE 3: CE + MV experiments ===")
         t0 = time.perf_counter()
 
@@ -599,12 +626,17 @@ async def main():
             slug = slugify(reranker)
             logger.info(f"  [CE] Start: {reranker}")
             reranked = await rerank_cross_encoder(
-                sie, reranker, query_texts, hybrid_pools, text_map, gpu,
+                sie,
+                reranker,
+                query_texts,
+                hybrid_pools,
+                text_map,
+                gpu,
+                semaphore,
                 cache_path=CACHE_DIR / f"rerank_ce_{slug}_hybrid{TOP_K_RETRIEVE}.json",
             )
             m = evaluate(reranked, query_items, qrel_map)
-            return {"condition_num": 4, "condition": f"CE-Rerank(hybrid-{TOP_K_RETRIEVE})",
-                    "reranker": reranker, **m}
+            return {"condition_num": 4, "condition": f"CE-Rerank(hybrid-{TOP_K_RETRIEVE})", "reranker": reranker, **m}
 
         async def run_mv_pipeline(mv_config):
             model = mv_config["model"]
@@ -613,39 +645,68 @@ async def main():
 
             logger.info(f"  [MV] Start encode: {model}")
             corpus_mvs = await encode_multivector(
-                sie, model, corpus_texts, is_query=False, gpu=gpu,
+                sie,
+                model,
+                corpus_texts,
+                is_query=False,
+                gpu=gpu,
+                semaphore=semaphore,
                 cache_path=CACHE_DIR / f"mv_corpus_{slug}.npz",
             )
             query_mvs = await encode_multivector(
-                sie, model, query_texts, is_query=True, gpu=gpu,
+                sie,
+                model,
+                query_texts,
+                is_query=True,
+                gpu=gpu,
+                semaphore=semaphore,
                 cache_path=CACHE_DIR / f"mv_query_{slug}.npz",
             )
+
+            # Pre-normalize corpus once (not per-query)
+            normed_corpus_mv_map = {
+                corpus_items[i]["corpus_id"]: normalize_mv(corpus_mvs[i]) for i in range(len(corpus_items))
+            }
+            normed_corpus_mvs = [normed_corpus_mv_map[cid] for cid in corpus_ids]
 
             loop = asyncio.get_event_loop()
 
             if run_mv_rerank:
-                corpus_mv_map = {corpus_items[i]["corpus_id"]: corpus_mvs[i]
-                                 for i in range(len(corpus_items))}
                 reranked = await loop.run_in_executor(
-                    None, rerank_multivector, query_mvs, corpus_mv_map, hybrid_pools,
+                    None,
+                    rerank_multivector,
+                    query_mvs,
+                    normed_corpus_mv_map,
+                    hybrid_pools,
                     CACHE_DIR / f"rerank_mv_{slug}_hybrid{TOP_K_RETRIEVE}.json",
                 )
                 m = evaluate(reranked, query_items, qrel_map)
-                results.append({"condition_num": 5, "condition": f"MV-Rerank(hybrid-{TOP_K_RETRIEVE})",
-                               "reranker": model, "mv_dim": mv_config["dim"], **m})
+                results.append(
+                    {
+                        "condition_num": 5,
+                        "condition": f"MV-Rerank(hybrid-{TOP_K_RETRIEVE})",
+                        "reranker": model,
+                        "mv_dim": mv_config["dim"],
+                        **m,
+                    }
+                )
 
             if run_mv_direct:
                 ranked = await loop.run_in_executor(
-                    None, retrieve_multivector, query_mvs, corpus_ids, corpus_mvs,
+                    None,
+                    retrieve_multivector,
+                    query_mvs,
+                    corpus_ids,
+                    normed_corpus_mvs,
                     CACHE_DIR / f"retrieve_mv_{slug}.json",
                 )
                 m = evaluate(ranked, query_items, qrel_map)
-                results.append({"condition_num": 6, "condition": "MV-Direct",
-                               "reranker": model, "mv_dim": mv_config["dim"], **m})
+                results.append(
+                    {"condition_num": 6, "condition": "MV-Direct", "reranker": model, "mv_dim": mv_config["dim"], **m}
+                )
 
             return results
 
-        # Fire all experiments
         all_tasks = []
         if 4 not in skip:
             for r in CROSS_ENCODER_RERANKERS:
@@ -665,7 +726,6 @@ async def main():
         logger.info(f"Phase 3: {time.perf_counter() - t0:.1f}s")
         logger.info(f"Total: {time.perf_counter() - t_total:.1f}s")
 
-    # ── Final ──────────────────────────────────────────────────────
     write_results_csv(results_log, RESULTS_CSV)
     print_summary(results_log)
 
