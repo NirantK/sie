@@ -1,5 +1,10 @@
-condition,condition_num,mrr@10,n_queries,ndcg@10,recall@10,reranker
-BM25-only,1,0.2115,1854,0.1849,0.2386,—
-Vector-only,2,0.5317,1854,0.3962,0.4377,—
-RRF(BM25+Vec),3,0.4505,1854,0.3583,0.4337,—
-CE-Rerank(hybrid-25),4,0.6228,1854,0.5098,0.5587,mixedbread-ai/mxbai-rerank-base-v2
+condition,condition_num,mrr@10,mv_dim,n_queries,ndcg@10,recall@10,reranker
+BM25-only,1,0.2115,,1854,0.1849,0.2386,-
+Vector-only,2,0.5317,,1854,0.3962,0.4377,-
+RRF(BM25+Vec),3,0.4505,,1854,0.3583,0.4337,-
+CE-Rerank(hybrid-25),4,0.6319,,1854,0.5068,0.5558,BAAI/bge-reranker-v2-m3
+CE-Rerank(hybrid-25),4,0.6228,,1854,0.5098,0.5587,mixedbread-ai/mxbai-rerank-base-v2
+MV-Rerank(hybrid-25),5,0.5808,1024,1854,0.433,0.4737,BAAI/bge-m3
+MV-Direct,6,0.581,1024,1854,0.4354,0.4815,BAAI/bge-m3
+MV-Rerank(hybrid-25),5,0.3101,128,1854,0.2415,0.3034,mixedbread-ai/mxbai-colbert-large-v1
+MV-Direct,6,0.2392,128,1854,0.1768,0.211,mixedbread-ai/mxbai-colbert-large-v1
