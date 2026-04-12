@@ -1,0 +1,5 @@
+condition,condition_num,mrr@10,n_queries,ndcg@10,recall@10,reranker
+BM25-only,1,0.2115,1854,0.1849,0.2386,—
+Vector-only,2,0.5317,1854,0.3962,0.4377,—
+RRF(BM25+Vec),3,0.4505,1854,0.3583,0.4337,—
+CE-Rerank(hybrid-25),4,0.6228,1854,0.5098,0.5587,mixedbread-ai/mxbai-rerank-base-v2
