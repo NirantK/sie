@@ -1,27 +1,60 @@
-# Retrieval Ablation Benchmark
+# How to Get the Best Retrieval Pipeline for Financial Document Search
 
-Benchmark comparing 6 retrieval strategies and 7 models on financial 10-K filings (vidore_v3_finance_en: 2942 pages, 1854 queries).
+One SIE cluster. Seven models. One API call each. No model serving to manage.
+
+This example benchmarks 6 retrieval strategies on real SEC 10-K filings to answer: **what combination of embedding, reranking, and late-interaction models actually works best for page-level document search?**
+
+The answer matters because most teams pick one model and hope for the best. We tested all the approaches — BM25, dense vector, RRF fusion, cross-encoder reranking, and multi-vector (ColBERT) scoring — against the same 1,854 queries on 2,942 pages from 6 major banks.
+
+## Start Here
+
+```python
+from sie_sdk import SIEAsyncClient
+
+async with SIEAsyncClient("http://your-sie-endpoint:8080", api_key="SL-...") as sie:
+    # Dense embedding — one line
+    result = await sie.encode("BAAI/bge-m3", [{"text": "quarterly revenue growth"}], output_types=["dense"])
+
+    # Cross-encoder reranking — same API, different model
+    scores = await sie.score("mixedbread-ai/mxbai-rerank-base-v2",
+                              query={"text": "quarterly revenue growth"},
+                              items=[{"text": page} for page in candidate_pages])
+
+    # Multi-vector (ColBERT) — same API again
+    mvs = await sie.encode("jinaai/jina-colbert-v2", [{"text": "quarterly revenue growth"}],
+                            output_types=["multivector"])
+```
+
+Three model families. One endpoint. No container orchestration.
 
 ## Results
 
-| # | Condition | Model | NDCG@10 | MRR@10 | Recall@10 |
-|---|-----------|-------|---------|--------|-----------|
-| 4 | CE Rerank | mxbai-rerank-base-v2 | **0.5098** | 0.6228 | **0.5587** |
-| 4 | CE Rerank | bge-reranker-v2-m3 | 0.5069 | 0.6321 | 0.5558 |
-| 6 | MV Direct | bge-m3 (1024d) | 0.4354 | 0.581 | 0.4815 |
-| 5 | MV Rerank | bge-m3 (1024d) | 0.433 | 0.5808 | 0.4737 |
-| 5 | MV Rerank | jina-colbert-v2 (128d) | 0.431 | 0.548 | 0.4937 |
-| 6 | MV Direct | jina-colbert-v2 (128d) | 0.4187 | 0.5322 | 0.486 |
-| 2 | Vector | bge-m3 dense | 0.3962 | 0.5317 | 0.4377 |
-| 3 | RRF | - | 0.3583 | 0.4505 | 0.4337 |
-| 5 | MV Rerank | GTE-ModernColBERT (128d) | 0.3439 | 0.4188 | 0.4241 |
-| 1 | BM25 | - | 0.1849 | 0.2115 | 0.2386 |
+| Strategy | Model | NDCG@10 | Recall@10 | What it shows |
+|----------|-------|---------|-----------|---------------|
+| **CE Rerank** | mxbai-rerank | **0.510** | **0.559** | Best quality: +28% over vector |
+| CE Rerank | bge-reranker | 0.507 | 0.556 | Both CE models work equally well |
+| MV Direct | bge-m3 (1024d) | 0.435 | 0.482 | No GPU at inference, +10% over vector |
+| MV Rerank | jina-colbert-v2 (128d) | 0.431 | 0.494 | 96% of bge-m3 quality at 12.5% storage |
+| Vector | bge-m3 dense | 0.396 | 0.438 | Strong baseline |
+| RRF | BM25+Vector | 0.358 | 0.434 | Hybrid hurts here — BM25 dilutes signal |
+| BM25 | Turbopuffer FTS | 0.185 | 0.239 | Keyword search alone isn't enough |
 
-See [RESULTS.md](RESULTS.md) for methodology and detailed findings.
+See [RESULTS.md](RESULTS.md) for full methodology, all 15 conditions, and pool optimization experiments.
 
-## Quick Start
+## What This Shows About SIE
 
-### Prerequisites
+- **Model-agnostic**: swap bge-m3 for jina-colbert-v2 with one parameter change
+- **Multi-model pipelines**: dense encode → hybrid retrieval → cross-encoder rerank in one script, one cluster
+- **90+ models available**: not locked into one vendor's embeddings
+- **Async-native**: fire hundreds of concurrent requests, SIE handles batching and GPU scheduling
+
+## API Keys Required
+
+| Service | What for | Get one at |
+|---------|---------|------------|
+| **SIE** | Encoding, scoring, multi-vector | Self-hosted ([deploy guide](https://github.com/superlinked/sie)) or contact team |
+| **Turbopuffer** | BM25 + vector search index | [turbopuffer.com](https://turbopuffer.com) |
+| **HuggingFace** | Dataset download (free, cached) | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
 
 Create `.env` in this directory:
 
@@ -31,45 +64,41 @@ SIE_API_KEY=SL-...
 TURBOPUFFER_API_KEY=tpuf_...
 ```
 
-### Install
+## Run the Benchmark
 
 ```bash
+# Install
 uv sync
-```
 
-### Run
-
-```bash
-# Validate config without GPU
+# Validate config (no GPU needed)
 uv run python benchmark_ablation.py --dry-run
 
-# Full benchmark (all 6 conditions, all models)
+# Full benchmark — all 6 conditions, all models
 uv run python benchmark_ablation.py --gpu l4-spot
 
-# CE reranking only (conditions 1-4)
+# Just cross-encoder reranking (needs GPU)
 uv run python benchmark_ablation.py --gpu l4-spot --skip-conditions 5,6
 
-# MV direct only (condition 6, CPU-bound after encoding)
-uv run python benchmark_ablation.py --gpu l4-spot --skip-conditions 1,2,3,4,5
+# Just multi-vector scoring (CPU after encoding)
+uv run python benchmark_ablation.py --skip-conditions 1,2,3,4 --mv-models jina-colbert
 
-# Select specific models
-uv run python benchmark_ablation.py --ce-models mxbai-rerank --mv-models bge-m3
-
-# Parallel on separate GPUs
-uv run python benchmark_ablation.py --gpu l4-spot --skip-conditions 5,6 &
-uv run python benchmark_ablation.py --gpu rtx6000-spot --skip-conditions 1,2,3,4 &
+# Pick your models
+uv run python benchmark_ablation.py --ce-models mxbai-rerank --mv-models bge-m3,jina-colbert
 ```
 
-### Caching
+All expensive operations (encoding, search) cache to `cache/ablation/`. Re-runs skip completed steps. CE reranking checkpoints every 100 queries for crash recovery.
 
-All expensive operations cache to `cache/ablation/`. Re-runs skip completed steps.
-CE reranking saves `.partial.json` checkpoints every 100 queries for crash recovery.
+## The Recommendation
 
-Results written incrementally to `ablation_results.csv` after each condition completes.
+For **financial document search** on this dataset:
+
+1. **Best quality**: Vector retrieval → Cross-encoder rerank (NDCG=0.51). Needs GPU for reranking.
+2. **Best without GPU at inference**: Multi-vector direct with bge-m3 (NDCG=0.44). Pre-encode offline, search with MaxSim on CPU.
+3. **Best cost/quality**: jina-colbert-v2 multi-vector (NDCG=0.43). 128d vectors = 8x less storage than bge-m3 MV, nearly identical quality.
 
 ## Dependencies
 
-- [SIE SDK](https://github.com/superlinked/sie) - async encode/score
-- [Turbopuffer](https://turbopuffer.com) - BM25 + vector search
-- [maxsim-cpu](https://github.com/mixedbread-ai/maxsim-cpu) - optimized MaxSim scoring
-- [datasets](https://huggingface.co/docs/datasets) - HuggingFace dataset loading (cached locally)
+- [SIE SDK](https://github.com/superlinked/sie) — async encode, score, extract
+- [Turbopuffer](https://turbopuffer.com) — BM25 + vector search
+- [maxsim-cpu](https://github.com/mixedbread-ai/maxsim-cpu) — optimized ColBERT MaxSim scoring
+- [datasets](https://huggingface.co/docs/datasets) — HuggingFace dataset loading (cached locally)
