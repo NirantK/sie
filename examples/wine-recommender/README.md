@@ -13,10 +13,10 @@ The duplicated database files (`wine_flavor.db`) and local `.env` setup are inte
 
 ## Project Structure
 
-- Root `app.py`: demo backend that wires OCR and retrieval into one FastAPI app
-- `app/`: Next.js frontend for the demo UI
-- `wine_flavor/`: standalone retrieval and reranking prototype
-- `wine_picture_detection/`: standalone OCR and label-matching prototype
+- `sie/examples/wine-recommender/app.py`: demo backend that wires OCR and retrieval into one FastAPI app
+- `sie/examples/wine-recommender/app/`: Next.js frontend for the demo UI
+- `sie/examples/wine-recommender/wine_flavor/`: standalone retrieval and reranking prototype
+- `sie/examples/wine-recommender/wine_picture_detection/`: standalone OCR and label-matching prototype
 
 ## Schema Design
 
@@ -59,7 +59,7 @@ The full app runs through Docker Compose:
 From the repo root:
 
 ```bash
-docker compose up --build
+cd examples/wine-recommender&&docker compose up --build
 ```
 
 App URLs:
