@@ -32,22 +32,15 @@ Specifically, isolate the contribution of each pipeline stage (keyword, semantic
 | 1 | BM25-only | Turbopuffer FTS (word_v2) | none | Keyword baseline |
 | 2 | Vector-only | bge-m3 dense ANN | none | Semantic search baseline |
 | 3 | RRF(BM25+Vector) | Fused (k=60) | none | Does hybrid beat vector-only? |
-| 4 | Cross-Encoder Rerank | RRF top-100 | mxbai-rerank, bge-reranker | Cross-encoder value over retrieval |
-| 5 | Multi-Vector Rerank | RRF top-100 | bge-m3 MV, mxbai-colbert | Multi-vector vs cross-encoder |
-| 6 | Multi-Vector Direct | Brute-force MaxSim (full corpus) | bge-m3 MV, mxbai-colbert | MV as standalone retriever vs reranker |
+| 4 | Cross-Encoder Rerank | Hybrid pool (25 BM25 + 25 Vector) | mxbai-rerank, bge-reranker | Cross-encoder value over retrieval |
+| 5 | Multi-Vector Rerank | Hybrid pool (25 BM25 + 25 Vector) | 5 ColBERT models | Multi-vector vs cross-encoder |
+| 6 | Multi-Vector Direct | Brute-force MaxSim (full corpus) | 5 ColBERT models | MV as standalone retriever |
 
 **Key controls:**
-- Conditions 4 and 5 rerank the **same** RRF top-100 candidate pool — only the reranker changes
+- Conditions 4 and 5 rerank the **same** hybrid pool (~46 candidates) — only the reranker changes
 - Condition 6 uses the **same** MV encodings as condition 5, but searches the full corpus (no pre-filtering)
 - bge-m3 appears as dense encoder (condition 2), MV reranker (condition 5), and MV retriever (condition 6) — isolates representation type AND retrieval strategy
 - All metrics computed identically across conditions (same eval code, same qrels)
-
-**Condition 6 approach:**
-- Brute-force MaxSim: for each query, compute MaxSim against all 2,942 corpus multivectors
-- Rank all docs by MaxSim score, take top-10 for evaluation
-- Reuses cached MV encodings from condition 5 (no extra GPU work)
-- Only 2,942 docs — brute-force is feasible (~5 min per model on CPU)
-- Answers: "Is multi-vector good enough as standalone retriever, or only valuable as reranker?"
 
 ---
 
@@ -64,11 +57,14 @@ Specifically, isolate the contribution of each pipeline stage (keyword, semantic
 | mixedbread-ai/mxbai-rerank-base-v2 | Server-side `sie.score()` | Strong general-purpose |
 | BAAI/bge-reranker-v2-m3 | Server-side `sie.score()` | Matches our encoder family |
 
-### Multi-Vector Rerankers (Condition 5)
+### Multi-Vector / Late Interaction Models (Conditions 5-6)
 | Model | Dim | Max tokens | Scoring | Notes |
 |-------|-----|------------|---------|-------|
 | BAAI/bge-m3 | 1024 | 8192 | Client-side MaxSim | Same model as encoder, MV output |
-| mixedbread-ai/mxbai-colbert-large-v1 | 128 | 512 | Client-side MaxSim | Dedicated ColBERT, truncation risk |
+| jinaai/jina-colbert-v2 | 128 | 8192 | Client-side MaxSim | Best cost/quality — 96% of bge-m3 at 12.5% storage |
+| lightonai/GTE-ModernColBERT-v1 | 128 | 8192 | Client-side MaxSim | Modern architecture |
+| mixedbread-ai/mxbai-colbert-large-v1 | 128 | 512 | Client-side MaxSim | Dedicated ColBERT |
+| colbert-ir/colbertv2.0 | 128 | 512 | Client-side MaxSim | Original ColBERT baseline |
 
 ---
 
@@ -76,10 +72,10 @@ Specifically, isolate the contribution of each pipeline stage (keyword, semantic
 
 | Component | Details |
 |-----------|---------|
-| SIE cluster | Self-hosted, RTX6000 GPUs, KEDA autoscaling |
+| SIE cluster | Self-hosted, KEDA autoscaling, L4 + RTX6000 GPUs |
 | Endpoint | From `SIE_BASE_URL` env var |
 | Turbopuffer | aws-us-east-1, cosine_distance, word_v2 FTS tokenizer |
-| GPU type | RTX6000 |
+| MaxSim | [maxsim-cpu](https://github.com/mixedbread-ai/maxsim-cpu) — optimized C library, CPU-only |
 
 ---
 

@@ -17,19 +17,23 @@ from sie_sdk import SIEAsyncClient
 
 async with SIEAsyncClient("http://your-sie-endpoint:8080", api_key="SL-...") as sie:
     # Dense embedding — one line
-    result = await sie.encode("BAAI/bge-m3", [{"text": "quarterly revenue growth"}], output_types=["dense"])
+    dense = await sie.encode("BAAI/bge-m3", [{"text": "quarterly revenue"}],
+                              output_types=["dense"])
 
-    # Cross-encoder reranking — same API, different model
-    scores = await sie.score("mixedbread-ai/mxbai-rerank-base-v2",
-                              query={"text": "quarterly revenue growth"},
-                              items=[{"text": page} for page in candidate_pages])
+    # Multi-vector (ColBERT) — same API, different output
+    colbert = await sie.encode("jinaai/jina-colbert-v2", [{"text": "quarterly revenue"}],
+                                output_types=["multivector"])
 
-    # Multi-vector (ColBERT) — same API again
-    mvs = await sie.encode("jinaai/jina-colbert-v2", [{"text": "quarterly revenue growth"}],
-                            output_types=["multivector"])
+    # Cross-encoder reranking — scores query against each candidate
+    result = await sie.score("mixedbread-ai/mxbai-rerank-base-v2",
+                              query={"text": "quarterly revenue"},
+                              items=[{"text": "Revenue was $50B..."},
+                                     {"text": "The board met on Tuesday..."}])
 ```
 
 Three model families. One endpoint. No container orchestration.
+
+> *Benchmark by [@NirantK](https://twitter.com/NirantK) for [Superlinked](https://superlinked.com)*
 
 ## Results
 
