@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 280" font-family="Inter, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#888"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="410" y="28" text-anchor="middle" font-weight="700" font-size="16" fill="#333">Image Embedding Retrieval</text>
+  <text x="410" y="46" text-anchor="middle" font-size="11" fill="#999">Embed product image, find nearest category in shared vector space</text>
+
+  <!-- ===== INDEXING ===== -->
+
+  <text x="20" y="82" font-size="10" font-weight="600" fill="#999">INDEXING</text>
+
+  <rect x="20" y="92" width="160" height="44" rx="6" fill="#F3F3F3" stroke="#CCC" stroke-width="1"/>
+  <text x="100" y="110" text-anchor="middle" font-size="11" fill="#666">Category names</text>
+  <text x="100" y="124" text-anchor="middle" font-size="9" fill="#999">"Laptops", "Running Shoes", …</text>
+
+  <line x1="180" y1="114" x2="228" y2="114" stroke="#BBB" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <rect x="232" y="92" width="170" height="44" rx="6" fill="#FEB97A" stroke="#E5A050" stroke-width="1"/>
+  <text x="317" y="110" text-anchor="middle" font-weight="600" font-size="11" fill="#fff">SIE — encode()</text>
+  <text x="317" y="124" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.85)">vision model, text mode</text>
+
+  <line x1="402" y1="114" x2="448" y2="114" stroke="#BBB" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <rect x="452" y="92" width="160" height="44" rx="6" fill="#F3F3F3" stroke="#CCC" stroke-width="1"/>
+  <text x="532" y="110" text-anchor="middle" font-size="11" fill="#666">Vector Store</text>
+  <text x="532" y="124" text-anchor="middle" font-size="9" fill="#999">category vectors indexed</text>
+
+  <!-- ===== QUERY ===== -->
+
+  <text x="20" y="172" font-size="10" font-weight="600" fill="#555">QUERY</text>
+
+  <!-- Product image placeholder -->
+  <rect x="20" y="182" width="160" height="52" rx="8" fill="#E8E8E8" stroke="#AAA" stroke-width="1.5"/>
+  <rect x="36" y="192" width="32" height="32" rx="4" fill="#D0D0D0" stroke="#BBB" stroke-width="1"/>
+  <text x="52" y="212" text-anchor="middle" font-size="16" fill="#999">🖼</text>
+  <text x="118" y="203" text-anchor="middle" font-weight="600" font-size="12" fill="#333">Product</text>
+  <text x="118" y="220" text-anchor="middle" font-size="9" fill="#666">Image</text>
+
+  <line x1="180" y1="208" x2="228" y2="208" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="232" y="182" width="170" height="52" rx="8" fill="#FE8019" stroke="#D96A0B" stroke-width="1.5"/>
+  <text x="317" y="203" text-anchor="middle" font-weight="700" font-size="13" fill="#fff">SIE — encode()</text>
+  <text x="317" y="220" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.85)">vision model, image mode</text>
+
+  <line x1="402" y1="208" x2="448" y2="208" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="452" y="182" width="160" height="52" rx="8" fill="#F3F3F3" stroke="#BBB" stroke-width="1.5"/>
+  <text x="532" y="200" text-anchor="middle" font-weight="600" font-size="12" fill="#333">kNN Search</text>
+  <text x="532" y="217" text-anchor="middle" font-size="10" fill="#666">cosine similarity</text>
+  <text x="532" y="230" text-anchor="middle" font-size="9" fill="#999">shared text-image space</text>
+
+  <line x1="612" y1="208" x2="648" y2="208" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="652" y="182" width="148" height="52" rx="8" fill="#E8E8E8" stroke="#AAA" stroke-width="1.5"/>
+  <text x="726" y="200" text-anchor="middle" font-weight="600" font-size="11" fill="#333">Predicted Category</text>
+  <text x="726" y="217" text-anchor="middle" font-size="9" fill="#666">Electronics > Computers</text>
+  <text x="726" y="230" text-anchor="middle" font-size="9" fill="#999">> Laptops</text>
+
+  <!-- Annotation -->
+  <line x1="20" y1="258" x2="800" y2="258" stroke="#E0E0E0" stroke-width="1"/>
+  <text x="410" y="274" text-anchor="middle" font-size="10" fill="#999">CLIP-family models encode text and images into a shared vector space. Categories indexed as text, queried with images.</text>
+</svg>
