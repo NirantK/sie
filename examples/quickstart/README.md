@@ -1,20 +1,21 @@
 # Retrieval Ablation Benchmark
 
-Benchmark comparing 6 retrieval strategies on financial 10-K filings (vidore_v3_finance_en: 2942 pages, 1854 queries).
+Benchmark comparing 6 retrieval strategies and 7 models on financial 10-K filings (vidore_v3_finance_en: 2942 pages, 1854 queries).
 
 ## Results
 
 | # | Condition | Model | NDCG@10 | MRR@10 | Recall@10 |
 |---|-----------|-------|---------|--------|-----------|
-| 4 | CE Rerank (hybrid) | mxbai-rerank-base-v2 | **0.5098** | 0.6228 | 0.5587 |
-| 4 | CE Rerank (hybrid) | bge-reranker-v2-m3 | 0.5069 | 0.6321 | 0.5558 |
+| 4 | CE Rerank | mxbai-rerank-base-v2 | **0.5098** | 0.6228 | **0.5587** |
+| 4 | CE Rerank | bge-reranker-v2-m3 | 0.5069 | 0.6321 | 0.5558 |
 | 6 | MV Direct | bge-m3 (1024d) | 0.4354 | 0.581 | 0.4815 |
-| 5 | MV Rerank (hybrid) | bge-m3 (1024d) | 0.433 | 0.5808 | 0.4737 |
-| 2 | Vector (dense) | bge-m3 | 0.3962 | 0.5317 | 0.4377 |
-| 3 | RRF(BM25+Vec) | - | 0.3583 | 0.4505 | 0.4337 |
-| 5 | MV Rerank (hybrid) | mxbai-colbert (128d) | 0.2415 | 0.3101 | 0.3034 |
-| 1 | BM25-only | - | 0.1849 | 0.2115 | 0.2386 |
-| 6 | MV Direct | mxbai-colbert (128d) | 0.1768 | 0.2392 | 0.2110 |
+| 5 | MV Rerank | bge-m3 (1024d) | 0.433 | 0.5808 | 0.4737 |
+| 5 | MV Rerank | jina-colbert-v2 (128d) | 0.431 | 0.548 | 0.4937 |
+| 6 | MV Direct | jina-colbert-v2 (128d) | 0.4187 | 0.5322 | 0.486 |
+| 2 | Vector | bge-m3 dense | 0.3962 | 0.5317 | 0.4377 |
+| 3 | RRF | - | 0.3583 | 0.4505 | 0.4337 |
+| 5 | MV Rerank | GTE-ModernColBERT (128d) | 0.3439 | 0.4188 | 0.4241 |
+| 1 | BM25 | - | 0.1849 | 0.2115 | 0.2386 |
 
 See [RESULTS.md](RESULTS.md) for methodology and detailed findings.
 

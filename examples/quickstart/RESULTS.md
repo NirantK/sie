@@ -97,31 +97,37 @@ All computed against official qrels (score 1=relevant, 2=highly relevant).
 
 ## Results
 
-**Sorted by NDCG@10 (top-25 retrieval, hybrid pool = union of 25 BM25 + 25 Vector):**
+**Sorted by NDCG@10 (hybrid pool = union of top-K BM25 + top-K Vector):**
 
-| # | Condition | Model | NDCG@10 | MRR@10 | R@3 | R@10 |
-|---|-----------|-------|---------|--------|-----|------|
-| 4a | **CE Rerank (hybrid)** | **mxbai-rerank-base-v2** | **0.5098** | **0.6228** | — | **0.5587** |
-| 4b | CE Rerank (hybrid) | bge-reranker-v2-m3 | 0.5069 | 0.6321 | 0.3771 | 0.5558 |
-| 6a | MV Direct | bge-m3 (1024d, 8192 tok) | 0.4354 | 0.581 | 0.3239 | 0.4815 |
-| 5a | MV Rerank (hybrid) | bge-m3 (1024d, 8192 tok) | 0.433 | 0.5808 | 0.3228 | 0.4737 |
-| 2 | Vector (dense) | bge-m3 (1024d) | 0.3962 | 0.5317 | 0.2939 | 0.4377 |
-| 3 | RRF(BM25+Vec) | — | 0.3583 | 0.4505 | 0.2612 | 0.4337 |
-| 5b | MV Rerank (hybrid) | mxbai-colbert (128d) | 0.2415 | 0.3101 | 0.1642 | 0.3034 |
-| 1 | BM25-only | — | 0.1849 | 0.2115 | 0.1266 | 0.2386 |
-| 6b | MV Direct | mxbai-colbert (128d) | 0.1768 | 0.2392 | 0.1248 | 0.2110 |
+| # | Condition | Model | Dim | Tokens | NDCG@10 | MRR@10 | R@10 |
+|---|-----------|-------|-----|--------|---------|--------|------|
+| 4 | **CE Rerank** | **mxbai-rerank-base-v2** | — | — | **0.5098** | **0.6228** | **0.5587** |
+| 4 | CE Rerank | bge-reranker-v2-m3 | — | — | 0.5069 | 0.6321 | 0.5558 |
+| 6 | MV Direct | bge-m3 | 1024 | 8192 | 0.4354 | 0.581 | 0.4815 |
+| 5 | MV Rerank | bge-m3 | 1024 | 8192 | 0.433 | 0.5808 | 0.4737 |
+| 5 | MV Rerank | **jina-colbert-v2** | 128 | 8192 | **0.431** | 0.548 | 0.4937 |
+| 6 | MV Direct | **jina-colbert-v2** | 128 | 8192 | **0.4187** | 0.5322 | 0.486 |
+| 2 | Vector | bge-m3 dense | 1024 | — | 0.3962 | 0.5317 | 0.4377 |
+| 3 | RRF | — | — | — | 0.3583 | 0.4505 | 0.4337 |
+| 5 | MV Rerank | GTE-ModernColBERT | 128 | 8192 | 0.3439 | 0.4188 | 0.4241 |
+| 6 | MV Direct | GTE-ModernColBERT | 128 | 8192 | 0.2853 | 0.355 | 0.3437 |
+| 5 | MV Rerank | mxbai-colbert | 128 | 512 | 0.2415 | 0.3101 | 0.3034 |
+| 5 | MV Rerank | colbertv2.0 | 128 | 512 | 0.2146 | 0.2626 | 0.2816 |
+| 1 | BM25 | — | — | — | 0.1849 | 0.2115 | 0.2386 |
+| 6 | MV Direct | mxbai-colbert | 128 | 512 | 0.1768 | 0.2392 | 0.2110 |
+| 6 | MV Direct | colbertv2.0 | 128 | 512 | 0.1667 | 0.2139 | 0.206 |
 
 ---
 
 ## Key Findings
 
 1. **Cross-encoder reranking wins**: mxbai (0.5098) ≈ bge-reranker (0.5069) — both +28% over dense vector
-2. **bge-m3 multivector direct** is strong second (0.4354) — +10% over dense, no GPU at inference
-3. **Cross-encoder > multi-vector** by +17% NDCG on this dataset
-4. **MV rerank ≈ MV direct** (0.433 vs 0.4354) — hybrid pool captures most relevant docs
-5. **colbert (128d) too weak** for financial 10-Ks — 128d representation insufficient regardless of token limit
-6. **RRF hurts** (0.3583 < 0.3962) — BM25 signal dilutes strong vector signal on this dataset
-7. **Model dimensionality matters**: bge-m3 1024d MV >> colbert 128d MV
+2. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
+3. **bge-m3 multivector direct** = strong second (0.4354) — +10% over dense, no GPU at inference
+4. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)
+5. **Score fusion can't beat cross-encoder**: best MV+vector fusion = 0.4413, CE cross-attention gap is fundamental
+6. **Pool optimization**: TOP_K=50, 50/50 hybrid union is optimal. Pool ceiling = 0.77 recall; reranker quality is the bottleneck
+7. **RRF hurts** (0.3583 < 0.3962) — BM25 dilutes strong vector signal on this dataset
 
 ---
 
