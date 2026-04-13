@@ -1,7 +1,7 @@
 [project]
 name = "quickstart"
 version = "0.1.0"
-description = "Add your description here"
+description = "Retrieval ablation benchmark for SIE + Turbopuffer"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
@@ -9,11 +9,8 @@ dependencies = [
     "python-dotenv",
     "loguru",
     "polars>=1.39.2",
-    "hf-transfer>=0.1.9",
-    "huggingface-hub>=0.36.2",
     "pyarrow>=22.0.0",
     "turbopuffer>=1.18.0",
-    "tenacity>=9.1.4",
     "maxsim-cpu>=0.1.0",
     "datasets>=3.6.0",
 ]

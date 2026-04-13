@@ -40,11 +40,15 @@ logger.add(sys.stderr, level="INFO")
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-SIE_BASE_URL = os.environ["SIE_BASE_URL"]
-SIE_API_KEY = os.environ["SIE_API_KEY"]
-TPUF_API_KEY = os.environ["TURBOPUFFER_API_KEY"]
 
-DEFAULT_GPU = "l4-spot"
+def _require_env(name: str) -> str:
+    val = os.environ.get(name)
+    if not val:
+        logger.error(f"Missing required env var: {name}. Set it in .env or shell.")
+        sys.exit(1)
+    return val
+
+
 PROVISION_TIMEOUT = 900
 RANDOM_SEED = 42
 MAX_TRANSPORT_RETRIES = 3
@@ -52,7 +56,7 @@ MAX_TRANSPORT_RETRIES = 3
 ENCODE_BATCH_SIZE = 64
 MV_ENCODE_BATCH_SIZE = 16
 TPUF_BATCH_SIZE = 500
-TOP_K_RETRIEVE = 25
+TOP_K_RETRIEVE = 50
 TOP_K_EVAL = 10
 RRF_K = 60
 CHECKPOINT_INTERVAL = 100
@@ -60,16 +64,18 @@ CHECKPOINT_INTERVAL = 100
 GPU_CONCURRENCY = 10
 
 ENCODER = "BAAI/bge-m3"
-NS_NAME = "ablation-bge-m3-v2"
 
-CROSS_ENCODER_RERANKERS = [
-    "mixedbread-ai/mxbai-rerank-base-v2",
-    "BAAI/bge-reranker-v2-m3",
-]
-MULTIVECTOR_RERANKERS = [
-    {"model": "BAAI/bge-m3", "dim": 1024, "max_tokens": 8192},
-    {"model": "mixedbread-ai/mxbai-colbert-large-v1", "dim": 128, "max_tokens": 512},
-]
+ALL_CE_RERANKERS = {
+    "mxbai-rerank": "mixedbread-ai/mxbai-rerank-base-v2",
+    "bge-reranker": "BAAI/bge-reranker-v2-m3",
+}
+ALL_MV_MODELS = {
+    "bge-m3": {"model": "BAAI/bge-m3", "dim": 1024, "max_tokens": 8192},
+    "colbert": {"model": "mixedbread-ai/mxbai-colbert-large-v1", "dim": 128, "max_tokens": 512},
+    "jina-colbert": {"model": "jinaai/jina-colbert-v2", "dim": 128, "max_tokens": 8192},
+    "modern-colbert": {"model": "lightonai/GTE-ModernColBERT-v1", "dim": 128, "max_tokens": 8192},
+    "colbertv2": {"model": "colbert-ir/colbertv2.0", "dim": 128, "max_tokens": 512},
+}
 
 CACHE_DIR = Path("cache/ablation")
 RESULTS_CSV = Path("ablation_results.csv")
@@ -490,13 +496,14 @@ def rerank_multivector(query_mvs, normed_corpus_mv_map, candidate_ids_list, cach
         logger.info(f"Cache hit: {cache_path}")
         return cache.load()
 
+    normed_queries = [normalize_mv(q) for q in query_mvs]
     all_reranked = []
-    for i, (q_mv, cand_ids) in enumerate(zip(query_mvs, candidate_ids_list)):
+    for i, (q_mv, cand_ids) in enumerate(zip(normed_queries, candidate_ids_list)):
         if not cand_ids:
             all_reranked.append([])
             continue
         doc_mvs = [normed_corpus_mv_map[cid] for cid in cand_ids]
-        scores = maxsim_cpu.maxsim_scores_variable(normalize_mv(q_mv), doc_mvs)
+        scores = maxsim_cpu.maxsim_scores_variable(q_mv, doc_mvs)
         scored = sorted(zip(cand_ids, scores), key=lambda x: x[1], reverse=True)
         all_reranked.append([cid for cid, _ in scored])
         if (i + 1) % 200 == 0:
@@ -515,9 +522,10 @@ def retrieve_multivector(query_mvs, corpus_ids, normed_corpus_mvs, cache_path=No
         logger.info(f"Cache hit: {cache_path}")
         return cache.load()
 
+    normed_queries = [normalize_mv(q) for q in query_mvs]
     all_ranked = []
-    for i, q_mv in enumerate(query_mvs):
-        scores = maxsim_cpu.maxsim_scores_variable(normalize_mv(q_mv), normed_corpus_mvs)
+    for i, q_mv in enumerate(normed_queries):
+        scores = maxsim_cpu.maxsim_scores_variable(q_mv, normed_corpus_mvs)
         scored = sorted(zip(corpus_ids, scores), key=lambda x: x[1], reverse=True)
         all_ranked.append([cid for cid, _ in scored])
         if (i + 1) % 100 == 0:
@@ -533,23 +541,71 @@ def retrieve_multivector(query_mvs, corpus_ids, normed_corpus_mvs, cache_path=No
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Retrieval Ablation Benchmark")
-    parser.add_argument("--gpu", default=DEFAULT_GPU)
-    parser.add_argument("--skip-conditions", default="")
+    parser = argparse.ArgumentParser(
+        description="Retrieval Ablation Benchmark on vidore_v3_finance_en",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n"
+        "  uv run python benchmark_ablation.py --gpu l4-spot\n"
+        "  uv run python benchmark_ablation.py --skip-conditions 5,6\n"
+        "  uv run python benchmark_ablation.py --ce-models mxbai-rerank --mv-models colbert\n"
+        "  uv run python benchmark_ablation.py --dry-run\n",
+    )
+    parser.add_argument("--gpu", default=None, help="GPU type (e.g. l4-spot, rtx6000-spot). Default: let router pick")
+    parser.add_argument("--skip-conditions", default="", help="Comma-separated condition numbers to skip (1-6)")
+    parser.add_argument("--namespace", default=None, help="Turbopuffer namespace. Default: ablation-{encoder-slug}")
+    parser.add_argument(
+        "--ce-models",
+        default="all",
+        help=f"CE reranker models: comma-separated from {list(ALL_CE_RERANKERS.keys())}, or 'all'",
+    )
+    parser.add_argument(
+        "--mv-models", default="all", help=f"MV models: comma-separated from {list(ALL_MV_MODELS.keys())}, or 'all'"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Validate config and print plan without running")
     args = parser.parse_args()
 
-    gpu = None if args.gpu == "none" else args.gpu
+    gpu = args.gpu
     skip = set(int(x) for x in args.skip_conditions.split(",") if x.strip())
     run_mv_rerank = 5 not in skip
     run_mv_direct = 6 not in skip
+    ns_name = args.namespace or f"ablation-{slugify(ENCODER)}"
+
+    # Resolve model selections
+    if args.ce_models == "all":
+        ce_rerankers = list(ALL_CE_RERANKERS.values())
+    else:
+        ce_rerankers = [ALL_CE_RERANKERS[k.strip()] for k in args.ce_models.split(",")]
+
+    if args.mv_models == "all":
+        mv_rerankers = list(ALL_MV_MODELS.values())
+    else:
+        mv_rerankers = [ALL_MV_MODELS[k.strip()] for k in args.mv_models.split(",")]
+
+    sie_base_url = _require_env("SIE_BASE_URL")
+    sie_api_key = _require_env("SIE_API_KEY")
+    tpuf_api_key = _require_env("TURBOPUFFER_API_KEY")
 
     semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
+
+    if args.dry_run:
+        conditions = [c for c in range(1, 7) if c not in skip]
+        logger.info("=== DRY RUN ===")
+        logger.info(f"GPU: {gpu or 'router picks'}")
+        logger.info(f"Namespace: {ns_name}")
+        logger.info(f"Conditions: {conditions}")
+        logger.info(f"CE models: {[slugify(r) for r in ce_rerankers]}")
+        logger.info(f"MV models: {[m['model'] for m in mv_rerankers]}")
+        logger.info(f"TOP_K: {TOP_K_RETRIEVE}, Hybrid pool: ~{TOP_K_RETRIEVE * 2} candidates")
+        logger.info(f"Cache dir: {CACHE_DIR} (exists={CACHE_DIR.exists()})")
+        logger.info(f"SIE endpoint: {sie_base_url}")
+        logger.info("Config OK. Remove --dry-run to execute.")
+        return
 
     np.random.seed(RANDOM_SEED)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    async with SIEAsyncClient(SIE_BASE_URL, api_key=SIE_API_KEY, timeout_s=900) as sie:
-        tpuf = AsyncTurbopuffer(api_key=TPUF_API_KEY, region="aws-us-east-1")
+    async with SIEAsyncClient(sie_base_url, api_key=sie_api_key, timeout_s=900) as sie:
+        tpuf = AsyncTurbopuffer(api_key=tpuf_api_key, region="aws-us-east-1")
 
         corpus_items, query_items, qrel_map = load_dataset()
         text_map = {item["corpus_id"]: item["text"] for item in corpus_items}
@@ -560,8 +616,8 @@ async def main():
         results_log = []
         t_total = time.perf_counter()
 
-        # ── Phase 1: Dense encode + index ──────────────────────────
-        logger.info("\n=== PHASE 1: Dense encode + index ===")
+        # ── Trial 1: Embed corpus + queries with bge-m3 ──────────────
+        logger.info("\n=== TRIAL 1: Embed corpus + queries (bge-m3 dense) ===")
         t0 = time.perf_counter()
 
         corpus_vecs = await encode_dense(
@@ -574,7 +630,7 @@ async def main():
             cache_path=CACHE_DIR / "dense_corpus.npz",
         )
         _, query_vecs = await asyncio.gather(
-            index_corpus(tpuf, corpus_items, corpus_vecs, NS_NAME),
+            index_corpus(tpuf, corpus_items, corpus_vecs, ns_name),
             encode_dense(
                 sie,
                 ENCODER,
@@ -585,19 +641,27 @@ async def main():
                 cache_path=CACHE_DIR / "dense_query.npz",
             ),
         )
-        logger.info(f"Phase 1: {time.perf_counter() - t0:.1f}s")
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            f"Trial 1: {elapsed:.1f}s ({len(corpus_texts) + len(query_texts)} items, "
+            f"{(len(corpus_texts) + len(query_texts)) / max(elapsed, 0.1):.0f} items/s)"
+        )
 
-        # ── Phase 2: Search ────────────────────────────────────────
-        logger.info(f"\n=== PHASE 2: Search (top-{TOP_K_RETRIEVE}) ===")
+        # ── Trial 2: BM25 + Vector retrieval ──────────────────────
+        logger.info(f"\n=== TRIAL 2: BM25 + Vector search (top-{TOP_K_RETRIEVE}) ===")
         t0 = time.perf_counter()
 
         bm25_results, vec_results = await asyncio.gather(
-            search_bm25(tpuf, NS_NAME, query_texts, cache_path=CACHE_DIR / f"bm25_top{TOP_K_RETRIEVE}.json"),
-            search_vector(tpuf, NS_NAME, query_vecs, cache_path=CACHE_DIR / f"vector_top{TOP_K_RETRIEVE}.json"),
+            search_bm25(tpuf, ns_name, query_texts, cache_path=CACHE_DIR / f"bm25_top{TOP_K_RETRIEVE}.json"),
+            search_vector(tpuf, ns_name, query_vecs, cache_path=CACHE_DIR / f"vector_top{TOP_K_RETRIEVE}.json"),
         )
-        logger.info(f"Phase 2: {time.perf_counter() - t0:.1f}s")
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            f"Trial 2: {elapsed:.1f}s ({len(query_texts) * 2} queries, "
+            f"{len(query_texts) * 2 / max(elapsed, 0.1):.0f} queries/s)"
+        )
 
-        # ── Eval conditions 1-3 ────────────────────────────────────
+        # ── Eval: BM25, Vector, RRF baselines ─────────────────────
         if 1 not in skip:
             m = evaluate(bm25_results, query_items, qrel_map)
             append_result(results_log, {"condition_num": 1, "condition": "BM25-only", "reranker": "-", **m})
@@ -618,8 +682,8 @@ async def main():
             f"Hybrid pool: mean={np.mean(pool_sizes):.0f}, min={min(pool_sizes)}, max={max(pool_sizes)} candidates"
         )
 
-        # ── Phase 3: Reranking experiments ─────────────────────────
-        logger.info("\n=== PHASE 3: CE + MV experiments ===")
+        # ── Trial 3: Cross-encoder rerank + Multi-vector scoring ──
+        logger.info("\n=== TRIAL 3: Cross-encoder rerank + Multi-vector scoring ===")
         t0 = time.perf_counter()
 
         async def run_ce(reranker):
@@ -709,10 +773,10 @@ async def main():
 
         all_tasks = []
         if 4 not in skip:
-            for r in CROSS_ENCODER_RERANKERS:
+            for r in ce_rerankers:
                 all_tasks.append(run_ce(r))
         if run_mv_rerank or run_mv_direct:
-            for cfg in MULTIVECTOR_RERANKERS:
+            for cfg in mv_rerankers:
                 all_tasks.append(run_mv_pipeline(cfg))
 
         for coro in asyncio.as_completed(all_tasks):
@@ -723,8 +787,11 @@ async def main():
             else:
                 append_result(results_log, r)
 
-        logger.info(f"Phase 3: {time.perf_counter() - t0:.1f}s")
-        logger.info(f"Total: {time.perf_counter() - t_total:.1f}s")
+        elapsed = time.perf_counter() - t0
+        n_experiments = len([r for r in results_log if r.get("condition_num", 0) >= 4])
+        logger.info(f"Trial 3: {elapsed:.1f}s ({n_experiments} experiments)")
+        total = time.perf_counter() - t_total
+        logger.info(f"Total: {total:.1f}s ({len(results_log)} conditions evaluated)")
 
     write_results_csv(results_log, RESULTS_CSV)
     print_summary(results_log)

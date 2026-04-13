@@ -113,56 +113,35 @@ All computed against official qrels (score 1=relevant, 2=highly relevant).
 
 ---
 
-## Decisions Log
-
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-04-11 | Use markdown text, not OCR | Isolate retrieval quality from OCR quality |
-| 2026-04-11 | RRF top-100 as shared rerank pool | Fair comparison: only reranker varies |
-| 2026-04-11 | Start with 2 MV models (bge-m3, mxbai-colbert) | bge-m3 = same-model comparison, mxbai-colbert = dedicated ColBERT |
-| 2026-04-11 | MV batch size = 16 | MV outputs are large (~2MB/doc for bge-m3 1024d), prevent OOM |
-| 2026-04-11 | Client-side MaxSim for MV reranking | SIE SDK design: `sie.score()` is cross-encoder only, `maxsim()` for ColBERT |
-| 2026-04-12 | TOP_K_RETRIEVE=25, hybrid pool=union | 25 BM25 + 25 Vector deduplicated = ~46 candidates |
-| 2026-04-12 | maxsim-cpu for MaxSim scoring | 10-20x faster than Python, C implementation from mixedbread |
-| 2026-04-12 | Focus on mxbai CE + colbert MV first | Queue bge-reranker CE + bge-m3 MV rerank for later |
-
----
-
 ## Key Findings
 
 1. **Cross-encoder reranking wins**: mxbai (0.5098) ≈ bge-reranker (0.5069) — both +28% over dense vector
 2. **bge-m3 multivector direct** is strong second (0.4354) — +10% over dense, no GPU at inference
 3. **Cross-encoder > multi-vector** by +17% NDCG on this dataset
 4. **MV rerank ≈ MV direct** (0.433 vs 0.4354) — hybrid pool captures most relevant docs
-5. **Previous CE result (0.1852) was a bug** — `s["rank"]` is output rank, not original index. Fixed via `s["item_id"]`
-4. **colbert (128d, 512 tok) too weak** for financial 10-Ks — not a truncation issue (max=250 tokens), just insufficient representation
-5. **RRF hurts** (0.3583 < 0.3962) — BM25 signal dilutes strong vector signal on this dataset
-6. **Model dimensionality matters more than architecture**: bge-m3 1024d MV >> colbert 128d MV
-
-## Answered Open Questions
-
-1. **colbert 512-token limit**: NOT the issue. Colbert tokenizer produces max 250 tokens (never hits 512). The 128d representation is simply too weak.
-2. **bge-m3 MV worth the cache?**: YES. 11GB cache → +10% NDCG over dense vector. Clear win.
-3. **jina-colbert-v2**: Worth testing — 8192 tokens + 128d might bridge the gap between colbert (weak) and bge-m3 MV (expensive).
+5. **colbert (128d) too weak** for financial 10-Ks — 128d representation insufficient regardless of token limit
+6. **RRF hurts** (0.3583 < 0.3962) — BM25 signal dilutes strong vector signal on this dataset
+7. **Model dimensionality matters**: bge-m3 1024d MV >> colbert 128d MV
 
 ---
 
 ## Reproducibility
 
-- Script: `benchmark_ablation.py`
-- All intermediate artifacts cached in `cache/ablation/` directory
+```bash
+# Full run (all conditions, all models)
+uv run python benchmark_ablation.py --gpu l4-spot
+
+# Dry run (validate config)
+uv run python benchmark_ablation.py --dry-run
+
+# Selective models
+uv run python benchmark_ablation.py --ce-models mxbai-rerank --mv-models bge-m3
+```
+
+- All intermediate artifacts cached in `cache/ablation/`
 - Re-runs skip completed steps automatically
 - Random seed: 42
 - RRF k parameter: 60
 - Retrieval depth: top-25
 - Evaluation depth: top-10
 - MaxSim scoring: `maxsim-cpu` (mixedbread C library)
-- MV encode cache: bge-m3 corpus=11GB, colbert corpus=286MB
-
----
-
-## Remaining Experiments
-
-1. bge-reranker-v2-m3 CE rerank (second CE model)
-2. jina-colbert-v2 MV direct (8192 tokens, 128d — best of both worlds?)
-3. TOP_K_RETRIEVE=100 with larger hybrid pool (does CE reranking help with more candidates?)
