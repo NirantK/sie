@@ -55,10 +55,10 @@ In order to run this demo, you will need to start the SIE server. Please refer t
 
 ## Setup
 
-From this folder:
+From the repo root:
 
 ```bash
-cd wine_flavor
+cd examples/wine-recommender/wine_flavor
 ```
 
 Create a `.env` file with the required settings:
@@ -86,9 +86,9 @@ DEMO_NUM_PAGES=5
 
 ## Run
 
-This folder is mainly the retrieval prototype code used by the root app, so the most direct way to use it in the full demo is still through the root backend.
+This folder is mainly the retrieval prototype code used by the app, so the most direct way to use it is by running the full demo. Detailed instructions to do so are in `sie/examples/wine-recommender/README.md`
 
-If you want to inspect or compare the retrieval logic directly, run the evaluation scripts from the repo root:
+If you want to inspect or compare the retrieval logic directly, run the evaluation scripts from the `/sie/examples/wine-recommender` directory:
 
 ```bash
 python test/eval_queries.py
