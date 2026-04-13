@@ -2,6 +2,8 @@
 
 One SIE cluster. Seven models. One API call each. No model serving to manage.
 
+![Pipeline](hero.png)
+
 ![Results](results_chart.png)
 
 This example benchmarks 6 retrieval strategies on real SEC 10-K filings to answer: **what combination of embedding, reranking, and late-interaction models actually works best for page-level document search?**
