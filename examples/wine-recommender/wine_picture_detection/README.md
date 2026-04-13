@@ -57,10 +57,17 @@ OCR_GPU=l4-spot
 OCR_PROVISION_TIMEOUT_S=900
 ```
 
-## Run
+## Run the OCR script directly
 
-Run the OCR script directly:
+From the repo root:
 
+1. Install requirements
+
+```bash
+cd examples/wine-recommender/wine_picture_detection&&pip install -r requirements.txt
+```
+
+2. Run the OCR script
 ```bash
 python textract.py
 ```
