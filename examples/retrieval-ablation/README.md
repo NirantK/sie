@@ -2,6 +2,8 @@
 
 One SIE cluster. Seven models. One API call each. No model serving to manage.
 
+![Results](results_chart.png)
+
 This example benchmarks 6 retrieval strategies on real SEC 10-K filings to answer: **what combination of embedding, reranking, and late-interaction models actually works best for page-level document search?**
 
 The answer matters because most teams pick one model and hope for the best. We tested all the approaches — BM25, dense vector, RRF fusion, cross-encoder reranking, and multi-vector (ColBERT) scoring — against the same 1,854 queries on 2,942 pages from 6 major banks.
