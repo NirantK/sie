@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 280" font-family="Inter, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#888"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="410" y="28" text-anchor="middle" font-weight="700" font-size="16" fill="#333">Zero-Shot NLI Classification</text>
+  <text x="410" y="46" text-anchor="middle" font-size="11" fill="#999">Score each candidate category as an NLI hypothesis</text>
+
+  <!-- Candidate labels input (from top) -->
+  <rect x="272" y="64" width="120" height="36" rx="6" fill="#F3F3F3" stroke="#CCC" stroke-width="1"/>
+  <text x="332" y="80" text-anchor="middle" font-size="10" fill="#666">Category labels</text>
+  <text x="332" y="93" text-anchor="middle" font-size="9" fill="#999">N candidates</text>
+  <line x1="332" y1="100" x2="332" y2="130" stroke="#BBB" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- Product -->
+  <rect x="20" y="138" width="160" height="52" rx="8" fill="#E8E8E8" stroke="#AAA" stroke-width="1.5"/>
+  <text x="100" y="159" text-anchor="middle" font-weight="600" font-size="12" fill="#333">Product Title</text>
+  <text x="100" y="176" text-anchor="middle" font-size="9" fill="#666">"Lenovo ThinkPad X1 Carbon"</text>
+
+  <!-- Arrow -->
+  <line x1="180" y1="164" x2="228" y2="164" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- SIE extract -->
+  <rect x="232" y="130" width="200" height="68" rx="8" fill="#FE8019" stroke="#D96A0B" stroke-width="1.5"/>
+  <text x="332" y="154" text-anchor="middle" font-weight="700" font-size="13" fill="#fff">SIE — extract()</text>
+  <text x="332" y="172" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.85)">NLI model scores each</text>
+  <text x="332" y="186" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.85)">category as hypothesis</text>
+
+  <!-- Arrow -->
+  <line x1="432" y1="164" x2="478" y2="164" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Scores -->
+  <rect x="482" y="130" width="160" height="68" rx="8" fill="#F3F3F3" stroke="#BBB" stroke-width="1.5"/>
+  <text x="562" y="152" text-anchor="middle" font-weight="600" font-size="12" fill="#333">Entailment Scores</text>
+  <text x="562" y="170" text-anchor="middle" font-size="9" fill="#666">Laptops: 0.92</text>
+  <text x="562" y="182" text-anchor="middle" font-size="9" fill="#999">Desktops: 0.71</text>
+  <text x="562" y="194" text-anchor="middle" font-size="9" fill="#999">Tablets: 0.58</text>
+
+  <!-- Arrow -->
+  <line x1="642" y1="164" x2="668" y2="164" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Result -->
+  <rect x="672" y="138" width="128" height="52" rx="8" fill="#E8E8E8" stroke="#AAA" stroke-width="1.5"/>
+  <text x="736" y="159" text-anchor="middle" font-weight="600" font-size="11" fill="#333">Top Category</text>
+  <text x="736" y="176" text-anchor="middle" font-size="9" fill="#666">Laptops (0.92)</text>
+
+  <!-- Annotation -->
+  <line x1="20" y1="228" x2="800" y2="228" stroke="#E0E0E0" stroke-width="1"/>
+  <text x="410" y="244" text-anchor="middle" font-size="10" fill="#999">Baseline approach. Scores all categories per product — O(N) inference cost per query.</text>
+  <text x="410" y="258" text-anchor="middle" font-size="10" fill="#999">Scales poorly with large taxonomies (10K+ categories) but requires no training data.</text>
+</svg>
