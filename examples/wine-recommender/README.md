@@ -37,6 +37,8 @@ The OCR side of the demo shows that SIE is not only useful for text retrieval. I
 
 This is important because real product flows often combine search and extraction rather than using only one primitive. A user may not know the exact wine name, but they may still have a label photo. The OCR path turns that image into usable text and then connects it back to the recommendation and catalog experience.
 
+The OCR pipeline is also intentionally model-flexible. You can use this example to try different OCR-capable extraction models through SIE without rewriting the application flow, which makes it a useful reference for developers who want to evaluate image-to-text approaches quickly.
+
 ## Schema Design
 
 ### Wine Recommendation
