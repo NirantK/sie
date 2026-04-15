@@ -420,7 +420,6 @@ async def main():
 
     sie_url = _require_env("SIE_BASE_URL")
     sie_key = _require_env("SIE_API_KEY")
-    tpuf_key = _require_env("TURBOPUFFER_API_KEY")
 
     sem = asyncio.Semaphore(3)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)

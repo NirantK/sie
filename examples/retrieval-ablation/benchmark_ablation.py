@@ -33,7 +33,7 @@ from loguru import logger
 from sie_sdk import SIEAsyncClient
 from turbopuffer import AsyncTurbopuffer
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")
@@ -78,8 +78,8 @@ ALL_MV_MODELS = {
     "colbertv2": {"model": "colbert-ir/colbertv2.0", "dim": 128, "max_tokens": 512},
 }
 
-CACHE_DIR = Path("cache/ablation")
-RESULTS_CSV = Path("ablation_results.csv")
+CACHE_DIR = Path(__file__).parent / "cache" / "ablation"
+RESULTS_CSV = Path(__file__).parent / "ablation_results.csv"
 
 
 # ── Caching ────────────────────────────────────────────────────────────────
@@ -737,7 +737,7 @@ async def main():
             }
             normed_corpus_mvs = [normed_corpus_mv_map[cid] for cid in corpus_ids]
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             if run_mv_rerank:
                 reranked = await loop.run_in_executor(
