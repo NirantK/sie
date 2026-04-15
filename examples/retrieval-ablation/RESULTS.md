@@ -95,9 +95,11 @@ All computed against official qrels (score 1=relevant, 2=highly relevant).
 
 **Sorted by NDCG@10 (hybrid pool = union of top-K BM25 + top-K Vector):**
 
+### Primary Ablation (TOP_K=25, ~46 candidates)
+
 | # | Condition | Model | Dim | Tokens | NDCG@10 | MRR@10 | R@10 |
 |---|-----------|-------|-----|--------|---------|--------|------|
-| 4 | **CE Rerank** | **mxbai-rerank-base-v2** | — | — | **0.5098** | **0.6228** | **0.5587** |
+| 4 | CE Rerank | mxbai-rerank-base-v2 | — | — | 0.5098 | 0.6228 | 0.5587 |
 | 4 | CE Rerank | bge-reranker-v2-m3 | — | — | 0.5069 | 0.6321 | 0.5558 |
 | 6 | MV Direct | bge-m3 | 1024 | 8192 | 0.4354 | 0.581 | 0.4815 |
 | 5 | MV Rerank | bge-m3 | 1024 | 8192 | 0.433 | 0.5808 | 0.4737 |
@@ -113,17 +115,29 @@ All computed against official qrels (score 1=relevant, 2=highly relevant).
 | 6 | MV Direct | mxbai-colbert | 128 | 512 | 0.1768 | 0.2392 | 0.2110 |
 | 6 | MV Direct | colbertv2.0 | 128 | 512 | 0.1667 | 0.2139 | 0.206 |
 
+### Reranker Sweep with Larger Pool (TOP_K=50, ~89 candidates)
+
+Larger candidate pools improve CE reranking by giving the model more relevant documents to surface.
+
+| # | Condition | Model | Pool | NDCG@10 | R@10 | vs TOP_K=25 |
+|---|-----------|-------|------|---------|------|-------------|
+| 4 | **CE Rerank** | **mxbai-rerank-base-v2** | ~89 | **0.5241** | **0.5876** | **+2.8%** |
+| 4 | CE Rerank | bge-reranker-v2-m3 | ~89 | 0.5214 | 0.5778 | +2.9% |
+
+*Partial sweep — 7 additional rerankers (mxbai-rerank-large, jina-reranker, bge-reranker-large/base, gte-reranker, MiniLM cross-encoders) tested but failed due to GPU CUDA errors. See `autoresearch_results.tsv` for details. Re-run with `uv run python autoresearch.py --gpu l4-spot --type reranker` when cluster is healthy.*
+
 ---
 
 ## Key Findings
 
-1. **Cross-encoder reranking wins**: mxbai (0.5098) ≈ bge-reranker (0.5069) — both +28% over dense vector
-2. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
-3. **bge-m3 multivector direct** = strong second (0.4354) — +10% over dense, no GPU at inference
-4. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)
-5. **Score fusion can't beat cross-encoder**: best MV+vector fusion = 0.4413, CE cross-attention gap is fundamental
-6. **Pool optimization**: TOP_K=50, 50/50 hybrid union is optimal. Pool ceiling = 0.77 recall; reranker quality is the bottleneck
-7. **RRF hurts** (0.3583 < 0.3962) — BM25 dilutes strong vector signal on this dataset
+1. **Cross-encoder reranking wins**: mxbai-base (0.5241) ≈ bge-reranker (0.5214) — both +32% over dense vector
+2. **Larger pools help CE**: TOP_K=50 (~89 candidates) gives +2.8% over TOP_K=25 (~46 candidates)
+3. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
+4. **bge-m3 multivector direct** = strong second (0.4354) — +10% over dense, no GPU at inference
+5. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)
+6. **Score fusion can't beat cross-encoder**: best MV+vector fusion = 0.4413, CE cross-attention gap is fundamental
+7. **Pool optimization**: TOP_K=50, 50/50 hybrid union is optimal. Pool ceiling = 0.77 recall; reranker quality is the bottleneck
+8. **RRF hurts** (0.3583 < 0.3962) — BM25 dilutes strong vector signal on this dataset
 
 ---
 
@@ -144,6 +158,6 @@ uv run python benchmark_ablation.py --ce-models mxbai-rerank --mv-models bge-m3
 - Re-runs skip completed steps automatically
 - Random seed: 42
 - RRF k parameter: 60
-- Retrieval depth: top-25
+- Retrieval depth: top-25 (primary), top-50 (reranker sweep)
 - Evaluation depth: top-10
 - MaxSim scoring: `maxsim-cpu` (mixedbread C library)

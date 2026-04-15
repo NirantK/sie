@@ -56,7 +56,7 @@ MAX_TRANSPORT_RETRIES = 3
 ENCODE_BATCH_SIZE = 64
 MV_ENCODE_BATCH_SIZE = 16
 TPUF_BATCH_SIZE = 500
-TOP_K_RETRIEVE = 25
+TOP_K_RETRIEVE = 50
 TOP_K_EVAL = 10
 RRF_K = 60
 CHECKPOINT_INTERVAL = 100
@@ -67,6 +67,7 @@ ENCODER = "BAAI/bge-m3"
 
 ALL_CE_RERANKERS = {
     "mxbai-rerank": "mixedbread-ai/mxbai-rerank-base-v2",
+    "mxbai-rerank-large": "mixedbread-ai/mxbai-rerank-large-v2",
     "bge-reranker": "BAAI/bge-reranker-v2-m3",
 }
 ALL_MV_MODELS = {
@@ -464,19 +465,22 @@ async def rerank_cross_encoder(sie, model, query_texts, candidate_ids_list, text
         raise RuntimeError(f"CE score failed after {MAX_TRANSPORT_RETRIES} retries for query {idx}")
 
     completed = done
-    for coro in asyncio.as_completed([score_one(i) for i in remaining]):
-        idx, ranked = await coro
-        results[idx] = ranked
-        completed += 1
+    batch_size = GPU_CONCURRENCY * 3  # Process in manageable batches to avoid connection pool exhaustion
+    for batch_start in range(0, len(remaining), batch_size):
+        batch = remaining[batch_start : batch_start + batch_size]
+        for coro in asyncio.as_completed([score_one(i) for i in batch]):
+            idx, ranked = await coro
+            results[idx] = ranked
+            completed += 1
 
-        if completed % CHECKPOINT_INTERVAL == 0:
-            if partial_path:
-                partial_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(partial_path, "w") as f:
-                    json.dump(results, f)
-            logger.info(f"  CE {model}: {completed}/{n} (checkpoint)")
-        elif completed % 200 == 0:
-            logger.info(f"  CE {model}: {completed}/{n}")
+            if completed % CHECKPOINT_INTERVAL == 0:
+                if partial_path:
+                    partial_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(partial_path, "w") as f:
+                        json.dump(results, f)
+                logger.info(f"  CE {model}: {completed}/{n} (checkpoint)")
+            elif completed % 200 == 0:
+                logger.info(f"  CE {model}: {completed}/{n}")
 
     if cache_path:
         cache.save(results)
@@ -604,7 +608,7 @@ async def main():
     np.random.seed(RANDOM_SEED)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    async with SIEAsyncClient(sie_base_url, api_key=sie_api_key, timeout_s=900) as sie:
+    async with SIEAsyncClient(sie_base_url, api_key=sie_api_key, timeout_s=900, max_connections=10) as sie:
         tpuf = AsyncTurbopuffer(api_key=tpuf_api_key, region="aws-us-east-1")
 
         corpus_items, query_items, qrel_map = load_dataset()
