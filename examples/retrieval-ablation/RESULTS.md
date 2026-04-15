@@ -119,24 +119,39 @@ All computed against official qrels (score 1=relevant, 2=highly relevant).
 
 Larger candidate pools improve CE reranking by giving the model more relevant documents to surface.
 
-| # | Condition | Model | Pool | NDCG@10 | R@10 | vs TOP_K=25 |
-|---|-----------|-------|------|---------|------|-------------|
-| 4 | **CE Rerank** | **mxbai-rerank-large-v2** | ~89 | **0.6004** | **0.6401** | — |
-| 4 | CE Rerank | mxbai-rerank-base-v2 | ~89 | 0.5241 | 0.5876 | +2.8% |
-| 4 | CE Rerank | bge-reranker-v2-m3 | ~89 | 0.5214 | 0.5778 | +2.9% |
+| # | Condition | Model | Pool | NDCG@10 | R@10 |
+|---|-----------|-------|------|---------|------|
+| 4 | **CE Rerank** | **mxbai-rerank-large-v2** | ~89 | **0.6004** | **0.6401** |
+| 4 | CE Rerank | mxbai-rerank-base-v2 | ~89 | 0.5241 | 0.5876 |
+| 4 | CE Rerank | bge-reranker-v2-m3 | ~89 | 0.5214 | 0.5778 |
+| 4 | CE Rerank | bge-reranker-large (v1) | ~89 | 0.4463 | 0.4930 |
+| 4 | CE Rerank | bge-reranker-base (v1) | ~89 | 0.3487 | 0.4100 |
 
-*Partial sweep — 6 additional rerankers (jina-reranker, bge-reranker-large/base, gte-reranker, MiniLM cross-encoders) pending. Re-run with `uv run python autoresearch.py --gpu l4-spot --type reranker` when cluster is healthy.*
+### Pool Composition Experiments (TOP_K=50, CE = mxbai-rerank-large-v2)
+
+Wider candidate pools improve CE reranking by increasing pool recall.
+
+| Pool Strategy | Candidates | Pool Recall | NDCG@10 | R@10 |
+|---------------|-----------|-------------|---------|------|
+| **MV-bge top-200** | ~200 | 0.89 | **0.6134** | **0.6560** |
+| Vec100 + MV-bge100 | ~130 | 0.90 | 0.6086 | 0.6490 |
+| Hybrid BM25+Vec (baseline) | ~89 | 0.77 | 0.6004 | 0.6401 |
+
+*MV-bge200+jina200 pool (~293 candidates, 0.94 recall) pending — session timeout at 1800/1854. Re-run with `uv run python autoresearch.py --gpu l4-spot --type pool`.*
+
+*Additional rerankers tested: bge-reranker-large (0.4463), bge-reranker-base (0.3487), MiniLM-L-12 (0.2389). jina-reranker-v3 not available on SIE. Results in `autoresearch_results.tsv`.*
 
 ---
 
 ## Key Findings
 
-1. **Cross-encoder reranking wins**: mxbai-large (0.6004) >> mxbai-base (0.5241) — large model is +52% over dense vector
-2. **Model size matters for CE**: large reranker (+14.5% over base) is the single biggest quality lever
-3. **Larger pools help CE**: TOP_K=50 (~89 candidates) gives +2.8% over TOP_K=25 (~46 candidates)
-3. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
-4. **bge-m3 multivector direct** = strong second (0.4354) — +10% over dense, no GPU at inference
-5. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)
+1. **Cross-encoder reranking wins**: mxbai-large (0.6134 with MV pool) >> mxbai-base (0.5241) — +55% over dense vector
+2. **Pool recall is the bottleneck**: CE scores 0.69 within-pool. MV-bge200 pool (0.89 recall) → 0.6134 vs hybrid-50 (0.77 recall) → 0.6004
+3. **MV retrieval > BM25+Vector as first stage**: MV-based pools have higher recall than hybrid BM25+Vector
+4. **Model size matters for CE**: large reranker (+14.5% over base) is the single biggest quality lever
+5. **Model generation matters**: bge-reranker-v2-m3 (0.5214) >> bge-reranker-large v1 (0.4463) — newer v2 beats larger v1
+6. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
+7. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)
 6. **Score fusion can't beat cross-encoder**: best MV+vector fusion = 0.4413, CE cross-attention gap is fundamental
 7. **Pool optimization**: TOP_K=50, 50/50 hybrid union is optimal. Pool ceiling = 0.77 recall; reranker quality is the bottleneck
 8. **RRF hurts** (0.3583 < 0.3962) — BM25 dilutes strong vector signal on this dataset

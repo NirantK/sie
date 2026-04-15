@@ -571,7 +571,16 @@ async def main():
                         break
                     ndcg, recall, _, status = await asyncio.wait_for(
                         test_encoder(
-                            sie, tpuf, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem
+                            sie,
+                            tpuf,
+                            model,
+                            corpus_texts,
+                            query_texts,
+                            corpus_items,
+                            query_items,
+                            qrel_map,
+                            args.gpu,
+                            sem,
                         ),
                         timeout=TIMEOUT_S,
                     )
