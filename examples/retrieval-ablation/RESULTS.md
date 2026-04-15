@@ -121,17 +121,19 @@ Larger candidate pools improve CE reranking by giving the model more relevant do
 
 | # | Condition | Model | Pool | NDCG@10 | R@10 | vs TOP_K=25 |
 |---|-----------|-------|------|---------|------|-------------|
-| 4 | **CE Rerank** | **mxbai-rerank-base-v2** | ~89 | **0.5241** | **0.5876** | **+2.8%** |
+| 4 | **CE Rerank** | **mxbai-rerank-large-v2** | ~89 | **0.6004** | **0.6401** | — |
+| 4 | CE Rerank | mxbai-rerank-base-v2 | ~89 | 0.5241 | 0.5876 | +2.8% |
 | 4 | CE Rerank | bge-reranker-v2-m3 | ~89 | 0.5214 | 0.5778 | +2.9% |
 
-*Partial sweep — 7 additional rerankers (mxbai-rerank-large, jina-reranker, bge-reranker-large/base, gte-reranker, MiniLM cross-encoders) tested but failed due to GPU CUDA errors. See `autoresearch_results.tsv` for details. Re-run with `uv run python autoresearch.py --gpu l4-spot --type reranker` when cluster is healthy.*
+*Partial sweep — 6 additional rerankers (jina-reranker, bge-reranker-large/base, gte-reranker, MiniLM cross-encoders) pending. Re-run with `uv run python autoresearch.py --gpu l4-spot --type reranker` when cluster is healthy.*
 
 ---
 
 ## Key Findings
 
-1. **Cross-encoder reranking wins**: mxbai-base (0.5241) ≈ bge-reranker (0.5214) — both +32% over dense vector
-2. **Larger pools help CE**: TOP_K=50 (~89 candidates) gives +2.8% over TOP_K=25 (~46 candidates)
+1. **Cross-encoder reranking wins**: mxbai-large (0.6004) >> mxbai-base (0.5241) — large model is +52% over dense vector
+2. **Model size matters for CE**: large reranker (+14.5% over base) is the single biggest quality lever
+3. **Larger pools help CE**: TOP_K=50 (~89 candidates) gives +2.8% over TOP_K=25 (~46 candidates)
 3. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
 4. **bge-m3 multivector direct** = strong second (0.4354) — +10% over dense, no GPU at inference
 5. **Token limit matters more than architecture**: 8192-token models (jina, GTE) >> 512-token models (colbertv2, mxbai-colbert)

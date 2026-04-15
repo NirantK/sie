@@ -10,8 +10,8 @@ Usage:
     uv run python autoresearch.py --gpu l4-spot --type encoder
 """
 
-import asyncio
 import argparse
+import asyncio
 import csv
 import json
 import math
@@ -26,7 +26,6 @@ import polars as pl
 from dotenv import load_dotenv
 from loguru import logger
 from sie_sdk import SIEAsyncClient
-from turbopuffer import AsyncTurbopuffer
 
 load_dotenv(Path(__file__).parent / ".env")
 logger.remove()
@@ -82,6 +81,7 @@ def _require_env(name):
 
 def slugify(name):
     import re
+
     return re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
 
 
@@ -113,6 +113,7 @@ def normalize_mv(mv):
 
 def load_dataset():
     from datasets import load_dataset as hf_load
+
     corpus = pl.from_arrow(hf_load("vidore/vidore_v3_finance_en", "corpus", split="test").data.table)
     queries = pl.from_arrow(hf_load("vidore/vidore_v3_finance_en", "queries", split="test").data.table)
     qrels_df = pl.from_arrow(hf_load("vidore/vidore_v3_finance_en", "qrels", split="test").data.table)
@@ -164,18 +165,27 @@ async def test_reranker(sie, model, query_texts, hybrid_pools, text_map, query_i
         for attempt in range(5):
             try:
                 async with sem:
-                    result = await sie.score(model, query={"text": query_texts[idx]}, items=items, gpu=gpu,
-                                             wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
-                    scored = sorted([(cands[int(s["item_id"].split("-")[1])], s["score"]) for s in result["scores"]],
-                                    key=lambda x: x[1], reverse=True)
+                    result = await sie.score(
+                        model,
+                        query={"text": query_texts[idx]},
+                        items=items,
+                        gpu=gpu,
+                        wait_for_capacity=True,
+                        provision_timeout_s=PROVISION_TIMEOUT,
+                    )
+                    scored = sorted(
+                        [(cands[int(s["item_id"].split("-")[1])], s["score"]) for s in result["scores"]],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )
                     done += 1
                     if done % 200 == 0:
                         logger.info(f"  CE {model}: {done}/{len(query_texts)}")
                     return idx, [cid for cid, _ in scored]
             except Exception as e:
                 if attempt < 4:
-                    backoff = (2 ** attempt) + random.uniform(0, 2)
-                    logger.warning(f"  CE retry {attempt+1}/5 ({type(e).__name__}), backoff {backoff:.1f}s")
+                    backoff = (2**attempt) + random.uniform(0, 2)
+                    logger.warning(f"  CE retry {attempt + 1}/5 ({type(e).__name__}), backoff {backoff:.1f}s")
                     await asyncio.sleep(backoff)
                 else:
                     raise
@@ -210,19 +220,26 @@ async def test_colbert(sie, model, corpus_texts, query_texts, corpus_items, quer
         logger.info(f"  Cache hit corpus: {corpus_cache}")
     else:
         corpus_mvs = []
-        batches = [corpus_texts[i:i + MV_BATCH] for i in range(0, len(corpus_texts), MV_BATCH)]
+        batches = [corpus_texts[i : i + MV_BATCH] for i in range(0, len(corpus_texts), MV_BATCH)]
         for bi, batch_texts in enumerate(batches):
             batch = [{"text": t} for t in batch_texts]
             for attempt in range(3):
                 try:
                     async with sem:
-                        result = await sie.encode(model, batch, output_types=["multivector"], is_query=False,
-                                                  gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
+                        result = await sie.encode(
+                            model,
+                            batch,
+                            output_types=["multivector"],
+                            is_query=False,
+                            gpu=gpu,
+                            wait_for_capacity=True,
+                            provision_timeout_s=PROVISION_TIMEOUT,
+                        )
                         corpus_mvs.extend(r["multivector"] for r in result)
                     break
                 except Exception as e:
                     if attempt < 2:
-                        logger.warning(f"  Encode retry {attempt+1}/3: {type(e).__name__}")
+                        logger.warning(f"  Encode retry {attempt + 1}/3: {type(e).__name__}")
                         await asyncio.sleep(5 * (attempt + 1))
                     else:
                         raise
@@ -238,19 +255,26 @@ async def test_colbert(sie, model, corpus_texts, query_texts, corpus_items, quer
         logger.info(f"  Cache hit query: {query_cache}")
     else:
         query_mvs = []
-        batches = [query_texts[i:i + MV_BATCH] for i in range(0, len(query_texts), MV_BATCH)]
+        batches = [query_texts[i : i + MV_BATCH] for i in range(0, len(query_texts), MV_BATCH)]
         for bi, batch_texts in enumerate(batches):
             batch = [{"text": t} for t in batch_texts]
             for attempt in range(3):
                 try:
                     async with sem:
-                        result = await sie.encode(model, batch, output_types=["multivector"], is_query=True,
-                                                  gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
+                        result = await sie.encode(
+                            model,
+                            batch,
+                            output_types=["multivector"],
+                            is_query=True,
+                            gpu=gpu,
+                            wait_for_capacity=True,
+                            provision_timeout_s=PROVISION_TIMEOUT,
+                        )
                         query_mvs.extend(r["multivector"] for r in result)
                     break
                 except Exception as e:
                     if attempt < 2:
-                        logger.warning(f"  Encode retry {attempt+1}/3: {type(e).__name__}")
+                        logger.warning(f"  Encode retry {attempt + 1}/3: {type(e).__name__}")
                         await asyncio.sleep(5 * (attempt + 1))
                     else:
                         raise
@@ -295,19 +319,26 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
         logger.info(f"  Cache hit corpus: {corpus_cache}")
     else:
         all_vecs = []
-        batches = [corpus_texts[i:i + ENCODE_BATCH] for i in range(0, len(corpus_texts), ENCODE_BATCH)]
+        batches = [corpus_texts[i : i + ENCODE_BATCH] for i in range(0, len(corpus_texts), ENCODE_BATCH)]
         for bi, batch_texts in enumerate(batches):
             batch = [{"text": t} for t in batch_texts]
             for attempt in range(3):
                 try:
                     async with sem:
-                        result = await sie.encode(model, batch, output_types=["dense"], is_query=False,
-                                                  gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
+                        result = await sie.encode(
+                            model,
+                            batch,
+                            output_types=["dense"],
+                            is_query=False,
+                            gpu=gpu,
+                            wait_for_capacity=True,
+                            provision_timeout_s=PROVISION_TIMEOUT,
+                        )
                         all_vecs.extend(r["dense"] for r in result)
                     break
                 except Exception as e:
                     if attempt < 2:
-                        logger.warning(f"  Encode retry {attempt+1}/3: {type(e).__name__}")
+                        logger.warning(f"  Encode retry {attempt + 1}/3: {type(e).__name__}")
                         await asyncio.sleep(5 * (attempt + 1))
                     else:
                         raise
@@ -323,19 +354,26 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
         logger.info(f"  Cache hit query: {query_cache}")
     else:
         all_vecs = []
-        batches = [query_texts[i:i + ENCODE_BATCH] for i in range(0, len(query_texts), ENCODE_BATCH)]
+        batches = [query_texts[i : i + ENCODE_BATCH] for i in range(0, len(query_texts), ENCODE_BATCH)]
         for bi, batch_texts in enumerate(batches):
             batch = [{"text": t} for t in batch_texts]
             for attempt in range(3):
                 try:
                     async with sem:
-                        result = await sie.encode(model, batch, output_types=["dense"], is_query=True,
-                                                  gpu=gpu, wait_for_capacity=True, provision_timeout_s=PROVISION_TIMEOUT)
+                        result = await sie.encode(
+                            model,
+                            batch,
+                            output_types=["dense"],
+                            is_query=True,
+                            gpu=gpu,
+                            wait_for_capacity=True,
+                            provision_timeout_s=PROVISION_TIMEOUT,
+                        )
                         all_vecs.extend(r["dense"] for r in result)
                     break
                 except Exception as e:
                     if attempt < 2:
-                        logger.warning(f"  Encode retry {attempt+1}/3: {type(e).__name__}")
+                        logger.warning(f"  Encode retry {attempt + 1}/3: {type(e).__name__}")
                         await asyncio.sleep(5 * (attempt + 1))
                     else:
                         raise
@@ -398,7 +436,7 @@ async def main():
     vec_path = CACHE_DIR / f"vector_top{TOP_K}.json"
 
     if not bm25_path.exists() or not vec_path.exists():
-        logger.error(f"Run benchmark_ablation.py first to generate search caches")
+        logger.error("Run benchmark_ablation.py first to generate search caches")
         sys.exit(1)
 
     bm25 = json.load(open(bm25_path))
@@ -406,7 +444,9 @@ async def main():
     hybrid_pools = [list(dict.fromkeys(b[:TOP_K] + v[:TOP_K])) for b, v in zip(bm25, vec)]
 
     logger.info(f"Hybrid pool: ~{np.mean([len(p) for p in hybrid_pools]):.0f} candidates/query")
-    logger.info(f"Models to test: rerankers={len(RERANKERS)}, colbert={len(COLBERT_MODELS)}, encoders={len(DENSE_ENCODERS)}")
+    logger.info(
+        f"Models to test: rerankers={len(RERANKERS)}, colbert={len(COLBERT_MODELS)}, encoders={len(DENSE_ENCODERS)}"
+    )
 
     async with SIEAsyncClient(sie_url, api_key=sie_key, timeout_s=TIMEOUT_S, max_connections=5) as sie:
         # Test rerankers
@@ -419,7 +459,9 @@ async def main():
                 t0 = time.perf_counter()
                 try:
                     ndcg, recall, _, status = await asyncio.wait_for(
-                        test_reranker(sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, args.gpu, sem),
+                        test_reranker(
+                            sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, args.gpu, sem
+                        ),
                         timeout=TIMEOUT_S,
                     )
                     elapsed = time.perf_counter() - t0
@@ -440,7 +482,9 @@ async def main():
                 t0 = time.perf_counter()
                 try:
                     ndcg, recall, _, status = await asyncio.wait_for(
-                        test_colbert(sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem),
+                        test_colbert(
+                            sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem
+                        ),
                         timeout=TIMEOUT_S,
                     )
                     elapsed = time.perf_counter() - t0
@@ -461,7 +505,9 @@ async def main():
                 t0 = time.perf_counter()
                 try:
                     ndcg, recall, _, status = await asyncio.wait_for(
-                        test_encoder(sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem),
+                        test_encoder(
+                            sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem
+                        ),
                         timeout=TIMEOUT_S,
                     )
                     elapsed = time.perf_counter() - t0
@@ -479,7 +525,9 @@ async def main():
             reader = csv.DictReader(f, delimiter="\t")
             rows = sorted(reader, key=lambda r: float(r.get("ndcg10") or 0), reverse=True)
         for r in rows[:15]:
-            logger.info(f"  {r['model']:<50s} NDCG={r.get('ndcg10','?'):>6s}  R@10={r.get('recall10','?'):>6s}  {r['status']}")
+            logger.info(
+                f"  {r['model']:<50s} NDCG={r.get('ndcg10', '?'):>6s}  R@10={r.get('recall10', '?'):>6s}  {r['status']}"
+            )
 
 
 if __name__ == "__main__":

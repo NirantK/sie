@@ -4,19 +4,10 @@ version = "0.0.0"
 description = "Search Inference Engine - GPU inference server for search workloads"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "sie-server",
     "sie-sdk",
-    "sie-bench",
-    "sie-router",
-    "einops>=0.8.1",
-    # Using fork for filter_languages fix (filters metadata.eval_langs for retrieval tasks)
-    "mteb[image] @ git+https://github.com/superlinked/mteb.git@main",
-    "pycocotools>=2.0.11",
 ]
 
 [project.optional-dependencies]
-# Terminal UI for monitoring (sie-top command)
-top = ["sie-admin[top]"]
 # Flash Attention optimization for development (Linux only - workspace extra)
 flash-attn = ["sie-server[flash-attn]"]
 # GPU metrics support for server
@@ -31,30 +22,9 @@ dev = [
     "pytest-sugar",
     "pytest-asyncio",
     "pytest-cov",
-    "pytest-subprocess", # For testing mise task subprocess calls
-    # Mise task dependencies
-    "pydantic>=2.0", # Config validation in mise tasks
-    "httpx>=0.27", # HTTP client for health checks in mise tasks
-    # Type checking
-    "ty>=0.0.21",
     # Linting
     "ruff>=0.14,<1",
-    # Pre-commit
-    "pre-commit~=4.0",
     "docker>=7.1.0",
-    "ipykernel>=7.1.0",
-    "python-hcl2>=7.3.1",
-    "pandas>=2.0",
-    "plotly>=5.0",
-    "statsmodels>=0.14",
-    "marimo>=0.20.4",
-    "modal>=0.73",
-]
-benchview = [
-    "datasets>=2.19,<4.0", # trust_remote_code support was removed in 4.0
-    "pillow>=10.0",
-    "pyyaml>=6.0",
-    "umap-learn>=0.5.5",
 ]
 
 [tool.uv]
@@ -77,16 +47,12 @@ torchvision = [
 ]
 sie-server = { workspace = true }
 sie-sdk = { workspace = true }
-sie-bench = { workspace = true }
-sie-admin = { workspace = true }
 sie-router = { workspace = true }
 
 [tool.uv.workspace]
 # Note: packages/sie_ts_sdk is TypeScript, not Python
 # Note: integrations/sie_ts_* are TypeScript, listed explicitly to avoid matching them
 members = [
-  "packages/sie_admin",
-  "packages/sie_bench",
   "packages/sie_router",
   "packages/sie_sdk",
   "packages/sie_server",
@@ -96,17 +62,12 @@ members = [
   "integrations/sie_haystack",
   "integrations/sie_langchain",
   "integrations/sie_llamaindex",
-  "integrations/sie_qdrant",
-  "integrations/sie_weaviate",
-  "integrations/sie_lancedb",
 ]
 
 [tool.pytest.ini_options]
-# Note: integrations are NOT in testpaths because each has its own conftest.py
-# which causes pytest plugin conflicts. Run with: mise run test integrations/
-testpaths = ["packages/sie_server/tests", "packages/sie_sdk/tests", "packages/sie_bench/tests", "packages/sie_admin/tests", "packages/sie_router/tests", "tools/mise_tasks/tests"]
-pythonpath = ["packages/sie_server/src", "packages/sie_sdk/src", "packages/sie_bench/src", "packages/sie_admin/src", "packages/sie_router/src", "tools/mise_tasks"]
-addopts = "-m 'not integration and not docker and not model' --import-mode=importlib"
+testpaths = ["packages/sie_server/tests", "packages/sie_sdk/tests", "packages/sie_router/tests"]
+pythonpath = ["packages/sie_server/src", "packages/sie_sdk/src", "packages/sie_router/src"]
+addopts = "-m 'not integration and not docker' --import-mode=importlib"
 asyncio_mode = "auto"
 markers = [
     "integration: tests that require a running SIE server (deselected by default)",
@@ -115,19 +76,12 @@ markers = [
     "gpu_hw: tests that require real GPU hardware",
     "scaling: tests for autoscaling behavior (KEDA)",
     "gke: tests that require a real GKE cluster",
-    "eks: tests that require a real EKS cluster",
-    "model: Model regression tests (download real weights, slow)"
 ]
 
 [tool.ruff]
 line-length = 120
 indent-width = 4
 target-version = "py312"
-exclude = [
-    "product/gtm/",       # Website content with HTML-styled code examples
-    "product/research/",  # Research scripts with relaxed linting
-    "tools/modal_sandbox.py", # modal sandbox script
-]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -192,7 +146,6 @@ ignore = [
     "RUF003",  # ambiguous-unicode-character-comment (intentional)
     "S101",    # Use of assert detected
     "SLF001",  # private-member-access (internal library access patterns)
-
     "SIM102",  # collapsible-if (sometimes clearer separated)
     "SIM105",  # suppressible-exception (contextlib.suppress not always clearer)
     "SIM108",  # if-else-block-instead-of-if-exp (ternary not always clearer)
@@ -228,21 +181,11 @@ ignore = [
     "SIM117",  # Nested with statements (readability in tests)
     "SLF001",  # Private member access
 ]
-# Cluster integration tests use print for progress output
-"deploy/tests/**/*" = [
-    "ANN",     # Type annotations (tests don't need full typing)
-    "ARG",     # Unused function arguments (fixtures)
-    "INP001",  # Implicit namespace package (pytest requires this)
-    "PLR2004", # Magic value comparisons
-    "S101",    # Assert statements
-    "T201",    # Progress output is intentional in cluster tests
-]
 "integrations/**/src/**/*" = [
     "PLC0415", # Lazy imports for optional dependencies
     "PLR0913", # Too many arguments (integration wrappers expose full SDK options)
     "TC002",   # Move to TYPE_CHECKING block (conflicts with lazy loading pattern)
 ]
-# Adapters use lazy imports for optional dependencies
 "**/adapters/**/*" = [
     "ARG002",  # Unused method arguments (adapter interface conformance)
     "ARG003",  # Unused classmethod arguments (factory method interface conformance)
@@ -252,7 +195,6 @@ ignore = [
     "PLR0913", # Adapter constructors need many parameters for flexibility
     "PLR2004", # Magic numbers in adapter-specific logic
 ]
-# Benchmark eval uses print for progress output
 "**/eval/**/*" = [
     "ARG002",  # Unused method arguments (interface conformance)
     "ERA001",  # Tensor shape docs look like code
@@ -260,120 +202,42 @@ ignore = [
     "SLF001",  # Private member access (MTEB internals)
     "T201",    # Progress output is intentional in benchmarking
 ]
-# CLI commands use print and lazy imports for optional dependencies
 "**/commands/**/*" = [
     "T201",    # CLI output is intentional
     "PLC0415", # Lazy imports for optional CLI dependencies
 ]
-# Benchmark runners print progress
 "**/runners/**/*" = [
     "T201",    # Benchmark runners print progress
     "PLC0415", # Lazy imports for optional dependencies
 ]
-# Core server has intentional patterns
 "packages/sie_server/src/sie_server/core/**/*" = [
     "ARG002",  # Unused method arguments (interface conformance)
     "PLC0415", # Lazy imports for optional GPU features
     "PLR2004", # Magic values in core logic
     "SLF001",  # Private member access (internal APIs)
 ]
-# Server API uses lazy imports for optional features
 "packages/sie_server/src/sie_server/api/**/*" = [
     "PLC0415", # Lazy imports for optional features
 ]
-# Server CLI uses lazy imports
 "packages/sie_server/src/sie_server/cli.py" = [
     "PLC0415", # Lazy imports for CLI initialization
 ]
-# Server config uses lazy imports
 "packages/sie_server/src/sie_server/config/**/*" = [
     "PLC0415", # Lazy imports for optional configs
 ]
-# Server observability uses lazy imports for optional tracing
 "packages/sie_server/src/sie_server/observability/**/*" = [
     "PLC0415", # Lazy imports for optional tracing/GPU libs
 ]
-# Router package uses lazy imports
 "packages/sie_router/src/sie_router/**/*" = [
     "PLC0415", # Lazy imports for optional features
     "PLR2004", # HTTP status codes are well-known magic numbers
     "T201",    # CLI output
 ]
-# Admin package uses lazy imports for optional dependencies (GCS, curses, etc.)
-"packages/sie_admin/src/sie_admin/**/*" = [
-    "PLC0415", # Lazy imports for optional admin dependencies
-    "T201",    # CLI output is intentional
-]
-# SDK has intentional patterns
 "packages/sie_sdk/src/sie_sdk/**/*" = [
     "ARG002",  # Unused method arguments (interface conformance)
     "PLC0415", # Lazy imports for optional dependencies
     "PLR2004", # HTTP status codes are well-known magic numbers
     "SLF001",  # Private member access (internal APIs)
-]
-# Bench package uses lazy imports and prints
-"packages/sie_bench/src/sie_bench/**/*" = [
-    "ARG002",  # Unused method arguments (interface conformance)
-    "F401",    # Unused imports (dependency availability checks)
-    "PLC0415", # Lazy imports for optional dependencies
-    "PLR2004", # Magic values in benchmark configs (intentional)
-    "SLF001",  # Private member access (benchmark internals)
-    "T201",    # Benchmark output is intentional
-]
-# Admin package CLI - magic values are OK in CLI output formatting
-"packages/sie_admin/src/sie_admin/commands/**/*" = [
-    "PLR2004", # Magic values in CLI display logic
-]
-# Marimo benchmark dashboard notebook
-"tools/benchview.py" = [
-    "ANN",     # Type annotations not needed in notebook cells
-    "B018",    # Marimo uses bare expressions for cell output display
-    "D",       # Docstrings not needed in notebook cells
-    "ERA001",  # Marimo cell comments may look like commented-out code
-    "INP001",  # Standalone script, not a package
-    "N803",    # Marimo cells receive uppercase constants as arguments
-    "PLC0415", # Lazy imports in notebook cells
-    "PLR2004", # Magic values in threshold constants and display logic
-    "T201",    # Print output is intentional in notebooks
-]
-# Profiling scripts use inline imports for optional GPU deps and print output
-"tools/profile_sparse.py" = [
-    "INP001",  # Standalone script, not a package
-    "PLC0415", # Lazy imports for optional GPU dependencies (flash_attn)
-    "S311",    # Pseudo-random generator is fine for synthetic text generation
-    "SLF001",  # Private member access (adapter internals for profiling)
-    "T201",    # Script output is intentional
-]
-"tools/profile_colbert.py" = [
-    "INP001",  # Standalone script, not a package
-    "PLC0415", # Lazy imports for optional GPU dependencies (flash_attn)
-    "S311",    # Pseudo-random generator is fine for synthetic text generation
-    "SLF001",  # Private member access (adapter internals for profiling)
-    "T201",    # Script output is intentional
-]
-"tools/profile_dense_p50.py" = [
-    "INP001",  # Standalone script, not a package
-    "PLR2004", # Magic values in threshold constants and display logic
-    "S311",    # Pseudo-random generator is fine for synthetic text generation
-    "T201",    # Script output is intentional
-]
-# Mise task scripts - CLI scripts that use print, subprocess, etc.
-"tools/mise_tasks/**/*" = [
-    "C901",    # Complexity acceptable for CLI command handlers
-    "INP001",  # Implicit namespace package (scripts, not a package)
-    "N999",    # Module name matrix-eval.py uses dash (mise convention)
-    "PLC0415", # Lazy imports for optional dependencies
-    "PLR1714", # Comparison style choice in CLI scripts
-    "PLR2004", # Magic values in CLI display logic
-    "SIM112",  # Lowercase env vars (TF_VAR_*, usage_* are conventions)
-    "T201",    # CLI output is intentional
-]
-# CLI and orchestration code - complexity acceptable for command handlers
-"packages/sie_bench/src/sie_bench/cli.py" = [
-    "C901",    # CLI commands are inherently complex (many options, validation)
-]
-"packages/sie_bench/src/sie_bench/matrix/executor.py" = [
-    "C901",    # Orchestration code is inherently complex (thread management, queues)
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -382,20 +246,14 @@ convention = "google"
 [tool.ruff.lint.pylint]
 max-args = 6
 
-# ty (Astral type checker) configuration
-# https://docs.astral.sh/ty/
-
 [tool.ty.environment]
 python-version = "3.12"
 
 [tool.ty.src]
 exclude = [
-    # Test files - use mocks/fixtures that don't type-check well with ty
     "packages/*/tests/**",
-    # kubernetes is optional (only in cluster deployments)
     "packages/sie_router/src/sie_router/discovery.py",
     "packages/sie_router/src/sie_router/pools.py",
-    # xformers/flash_attn optional (requires CUDA build)
     "packages/sie_server/src/sie_server/adapters/bert_flash/**",
     "packages/sie_server/src/sie_server/adapters/nomic_flash/**",
     "packages/sie_server/src/sie_server/adapters/bert_flash_cross_encoder/**",
@@ -408,20 +266,9 @@ exclude = [
     "packages/sie_server/src/sie_server/adapters/rope_flash/**",
     "packages/sie_server/src/sie_server/adapters/qwen2_flash/**",
     "packages/sie_server/src/sie_server/adapters/modernbert_flash_cross_encoder/**",
-    # mlflow/fastembed/wandb optional
-    "packages/sie_bench/src/sie_bench/tracking/mlflow.py",
-    "packages/sie_bench/src/sie_bench/tracking/wandb.py",
-    "packages/sie_bench/src/sie_bench/runners/fastembed.py",
-    # marimo notebooks
-    "tools/benchview.py",
-    # modal sandbox script
-    "tools/modal_sandbox.py",
 ]
 
 [tool.ty.rules]
-# Pydantic limitation: ty doesn't understand Pydantic's default system.
 missing-argument = "warn"
-# ty is stricter than needed for possibly-missing-attribute in many cases
 possibly-missing-attribute = "warn"
-# Suppress warnings about unused ty: ignore comments.
 unused-ignore-comment = "ignore"

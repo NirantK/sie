@@ -39,8 +39,9 @@ Three model families. One endpoint. No container orchestration.
 
 | Strategy | Model | NDCG@10 | Recall@10 | What it shows |
 |----------|-------|---------|-----------|---------------|
-| **CE Rerank** | mxbai-rerank | **0.524** | **0.588** | Best quality: +32% over vector |
-| CE Rerank | bge-reranker | 0.521 | 0.578 | Both CE models work equally well |
+| **CE Rerank** | mxbai-rerank-large | **0.600** | **0.640** | Best quality: +52% over vector |
+| CE Rerank | mxbai-rerank-base | 0.524 | 0.588 | Strong, smaller alternative |
+| CE Rerank | bge-reranker | 0.521 | 0.578 | Near-identical to mxbai-base |
 | MV Direct | bge-m3 (1024d) | 0.435 | 0.482 | No GPU at inference, +10% over vector |
 | MV Rerank | jina-colbert-v2 (128d) | 0.431 | 0.494 | 96% of bge-m3 quality at 12.5% storage |
 | Vector | bge-m3 dense | 0.396 | 0.438 | Strong baseline |
@@ -100,7 +101,7 @@ All expensive operations (encoding, search) cache to `cache/ablation/`. Re-runs 
 
 For **financial document search** on this dataset:
 
-1. **Best quality**: Vector retrieval → Cross-encoder rerank (NDCG=0.524). Needs GPU for reranking. Larger candidate pools (top-50) improve quality further.
+1. **Best quality**: Vector retrieval → Cross-encoder rerank with mxbai-rerank-large (NDCG=0.60). Needs GPU for reranking. Larger candidate pools (top-50) improve quality further.
 2. **Best without GPU at inference**: Multi-vector direct with bge-m3 (NDCG=0.44). Pre-encode offline, search with MaxSim on CPU.
 3. **Best cost/quality**: jina-colbert-v2 multi-vector (NDCG=0.43). 128d vectors = 8x less storage than bge-m3 MV, nearly identical quality.
 

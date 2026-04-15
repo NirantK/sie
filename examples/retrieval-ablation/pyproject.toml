@@ -1,5 +1,5 @@
 [project]
-name = "quickstart"
+name = "retrieval-ablation"
 version = "0.1.0"
 description = "Retrieval ablation benchmark for SIE + Turbopuffer"
 readme = "README.md"
