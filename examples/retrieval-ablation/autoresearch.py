@@ -45,6 +45,7 @@ RERANKERS = [
     "mixedbread-ai/mxbai-rerank-base-v2",
     "BAAI/bge-reranker-v2-m3",
     "jinaai/jina-reranker-v2-base-multilingual",
+    "jinaai/jina-reranker-v3",
     "BAAI/bge-reranker-large",
     "BAAI/bge-reranker-base",
     "Alibaba-NLP/gte-reranker-modernbert-base",
@@ -142,9 +143,9 @@ def log_result(model, model_type, ndcg, recall, elapsed, status, note=""):
         f.write(f"{model}\t{model_type}\t{ndcg}\t{recall}\t{round(elapsed)}\t{status}\t{note}\n")
 
 
-async def test_reranker(sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, gpu, sem):
+async def test_reranker(sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, gpu, sem, cache_slug=None):
     """Test a cross-encoder reranker on hybrid pool."""
-    slug = slugify(model)
+    slug = cache_slug or slugify(model)
     cache_path = CACHE_DIR / f"autoresearch_ce_{slug}.json"
     if cache_path.exists():
         results = json.load(open(cache_path))
@@ -407,7 +408,7 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
 async def main():
     parser = argparse.ArgumentParser(description="Autoresearch: scan SIE models")
     parser.add_argument("--gpu", default=None)
-    parser.add_argument("--type", choices=["reranker", "colbert", "encoder", "all"], default="all")
+    parser.add_argument("--type", choices=["reranker", "colbert", "encoder", "ensemble", "pool", "all"], default="all")
     parser.add_argument("--models", help="Comma-separated model filter (substring match)")
     args = parser.parse_args()
 
@@ -441,6 +442,11 @@ async def main():
     bm25 = json.load(open(bm25_path))
     vec = json.load(open(vec_path))
     hybrid_pools = [list(dict.fromkeys(b[:TOP_K] + v[:TOP_K])) for b, v in zip(bm25, vec)]
+
+    # Load MV retrieval results for pool experiments
+    mv_bge_path = CACHE_DIR / "retrieve_mv_baai-bge-m3.json"
+    mv_jina_path = CACHE_DIR / "retrieve_mv_jinaai-jina-colbert-v2.json"
+    vec100_path = CACHE_DIR / "vector_top100.json"
 
     logger.info(f"Hybrid pool: ~{np.mean([len(p) for p in hybrid_pools]):.0f} candidates/query")
     logger.info(
@@ -517,6 +523,104 @@ async def main():
                     logger.error(f"  {model}: FAILED ({elapsed:.0f}s) — {type(e).__name__}: {e}")
                     log_result(model, "encoder", 0, 0, elapsed, "failed", str(e)[:100])
 
+        # ── Ensemble experiments (CPU-only, uses cached CE results) ──────
+        if args.type in ("ensemble", "all"):
+            logger.info("\n=== ENSEMBLE EXPERIMENTS ===")
+            ce_results = {}
+            for path in CACHE_DIR.glob("autoresearch_ce_*.json"):
+                model_slug = path.stem.replace("autoresearch_ce_", "")
+                ce_results[model_slug] = json.load(open(path))
+            logger.info(f"  Loaded {len(ce_results)} cached CE results: {list(ce_results.keys())}")
+
+            def rrf_ensemble(result_lists, weights=None, k=60):
+                if weights is None:
+                    weights = [1.0] * len(result_lists)
+                combined = []
+                for qi in range(len(result_lists[0])):
+                    scores = {}
+                    for results, w in zip(result_lists, weights):
+                        for rank, cid in enumerate(results[qi]):
+                            scores[cid] = scores.get(cid, 0) + w / (k + rank + 1)
+                    combined.append(sorted(scores, key=scores.get, reverse=True))
+                return combined
+
+            ensembles = []
+            slugs = list(ce_results.keys())
+
+            # All pairs with equal weight
+            for i, s1 in enumerate(slugs):
+                for s2 in slugs[i + 1 :]:
+                    combo = rrf_ensemble([ce_results[s1], ce_results[s2]])
+                    ensembles.append((f"RRF({s1} + {s2})", combo))
+
+            # All triples with equal weight
+            for i, s1 in enumerate(slugs):
+                for j, s2 in enumerate(slugs[i + 1 :], i + 1):
+                    for s3 in slugs[j + 1 :]:
+                        combo = rrf_ensemble([ce_results[s1], ce_results[s2], ce_results[s3]])
+                        ensembles.append((f"RRF({s1} + {s2} + {s3})", combo))
+
+            # Weighted variants: best model gets 3x
+            if len(slugs) >= 2:
+                # Find best single model
+                best_slug = None
+                best_ndcg = 0
+                for slug, results in ce_results.items():
+                    ndcg, _ = evaluate(results, query_items, qrel_map)
+                    if ndcg > best_ndcg:
+                        best_ndcg = ndcg
+                        best_slug = slug
+                others = [s for s in slugs if s != best_slug]
+                for other in others:
+                    combo = rrf_ensemble([ce_results[best_slug], ce_results[other]], [3, 1])
+                    ensembles.append((f"RRF(3:1 {best_slug}:{other})", combo))
+                # Best + all others weighted 3:1:1:...
+                if len(others) >= 2:
+                    all_results = [ce_results[best_slug]] + [ce_results[s] for s in others]
+                    weights = [3.0] + [1.0] * len(others)
+                    combo = rrf_ensemble(all_results, weights)
+                    ensembles.append((f"RRF(3:1x{len(others)} {best_slug}+rest)", combo))
+
+            for name, combo in ensembles:
+                ndcg, recall = evaluate(combo, query_items, qrel_map)
+                logger.info(f"  {name}: NDCG={ndcg}, Recall={recall}")
+                log_result(name, "ensemble", ndcg, recall, 0, "ok")
+
+        # ── Pool experiments: MV-based pools + CE rerank ──────
+        if args.type in ("pool", "all"):
+            logger.info("\n=== POOL EXPERIMENTS ===")
+            best_ce_model = "mixedbread-ai/mxbai-rerank-large-v2"
+
+            pool_configs = []
+            # A. MV-bge top-200 pool (0.89 recall vs 0.77 current)
+            if mv_bge_path.exists():
+                mv_bge = json.load(open(mv_bge_path))
+                pool_configs.append(("mv-bge200", [m[:200] for m in mv_bge]))
+
+            # B. Vec100 + MV-bge100 union (0.90 recall, ~211 candidates)
+            if mv_bge_path.exists() and vec100_path.exists():
+                vec100 = json.load(open(vec100_path))
+                pool_configs.append(("vec100-mv-bge100", [list(dict.fromkeys(v[:100] + m[:100])) for v, m in zip(vec100, mv_bge)]))
+
+            # C. MV-bge200 + MV-jina200 union (0.94 recall, ~293 candidates)
+            if mv_bge_path.exists() and mv_jina_path.exists():
+                mv_jina = json.load(open(mv_jina_path))
+                pool_configs.append(("mv-bge200-jina200", [list(dict.fromkeys(m[:200] + j[:200])) for m, j in zip(mv_bge, mv_jina)]))
+
+            for pool_name, pools in pool_configs:
+                slug = f"pool-{pool_name}-mxbai-large"
+                avg_size = np.mean([len(p) for p in pools])
+                logger.info(f"\n  Pool '{pool_name}': ~{avg_size:.0f} candidates/query")
+                logger.info(f"  CE-scoring {pool_name} with {best_ce_model}...")
+                t0 = time.perf_counter()
+                ndcg, recall, _, status = await test_reranker(
+                    sie, best_ce_model, query_texts, pools, text_map,
+                    query_items, qrel_map, args.gpu, sem, cache_slug=slug,
+                )
+                elapsed = time.perf_counter() - t0
+                logger.info(f"  {pool_name} + CE: NDCG={ndcg}, Recall={recall} ({elapsed:.0f}s) [{status}]")
+                log_result(f"pool:{pool_name}+mxbai-large", "pool", ndcg, recall, elapsed, status)
+
     # Print leaderboard
     if RESULTS_FILE.exists():
         logger.info("\n=== LEADERBOARD ===")
@@ -524,9 +628,9 @@ async def main():
             reader = csv.DictReader(f, delimiter="\t")
             rows = sorted(reader, key=lambda r: float(r.get("ndcg10") or 0), reverse=True)
         for r in rows[:15]:
-            logger.info(
-                f"  {r['model']:<50s} NDCG={r.get('ndcg10', '?'):>6s}  R@10={r.get('recall10', '?'):>6s}  {r['status']}"
-            )
+            ndcg = r.get("ndcg10") or "?"
+            recall = r.get("recall10") or "?"
+            logger.info(f"  {r['model']:<50s} NDCG={ndcg:>6s}  R@10={recall:>6s}  {r['status']}")
 
 
 if __name__ == "__main__":
