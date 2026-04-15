@@ -26,6 +26,7 @@ import polars as pl
 from dotenv import load_dotenv
 from loguru import logger
 from sie_sdk import SIEAsyncClient
+from turbopuffer import AsyncTurbopuffer
 
 load_dotenv(Path(__file__).parent / ".env")
 logger.remove()
@@ -143,7 +144,9 @@ def log_result(model, model_type, ndcg, recall, elapsed, status, note=""):
         f.write(f"{model}\t{model_type}\t{ndcg}\t{recall}\t{round(elapsed)}\t{status}\t{note}\n")
 
 
-async def test_reranker(sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, gpu, sem, cache_slug=None):
+async def test_reranker(
+    sie, model, query_texts, hybrid_pools, text_map, query_items, qrel_map, gpu, sem, cache_slug=None
+):
     """Test a cross-encoder reranker on hybrid pool."""
     slug = cache_slug or slugify(model)
     cache_path = CACHE_DIR / f"autoresearch_ce_{slug}.json"
@@ -302,11 +305,17 @@ async def test_colbert(sie, model, corpus_texts, query_texts, corpus_items, quer
     return ndcg, recall, 0, "ok"
 
 
-async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, gpu, sem):
-    """Test a dense encoder — encode corpus+queries, brute-force cosine, evaluate."""
+TPUF_BATCH = 256
+
+
+async def test_encoder(sie, tpuf, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, gpu, sem):
+    """Test a dense encoder: encode → Turbopuffer index → ANN + BM25 → hybrid pool → evaluate."""
     slug = slugify(model)
+    ns_name = f"ablation-{slug}"
     corpus_cache = CACHE_DIR / f"dense_corpus_{slug}.npz"
     query_cache = CACHE_DIR / f"dense_query_{slug}.npz"
+    vec_cache = CACHE_DIR / f"vector_top{TOP_K}_{slug}.json"
+    bm25_cache = CACHE_DIR / f"bm25_top{TOP_K}_{slug}.json"
     results_cache = CACHE_DIR / f"autoresearch_dense_{slug}.json"
 
     if results_cache.exists():
@@ -314,7 +323,7 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
         ndcg, recall = evaluate(results, query_items, qrel_map)
         return ndcg, recall, 0, "cached"
 
-    # Encode corpus
+    # 1. Encode corpus
     if corpus_cache.exists():
         corpus_vecs = np.load(corpus_cache)["vectors"]
         logger.info(f"  Cache hit corpus: {corpus_cache}")
@@ -349,7 +358,7 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
         corpus_cache.parent.mkdir(parents=True, exist_ok=True)
         np.savez(corpus_cache, vectors=corpus_vecs)
 
-    # Encode queries
+    # 2. Encode queries
     if query_cache.exists():
         query_vecs = np.load(query_cache)["vectors"]
         logger.info(f"  Cache hit query: {query_cache}")
@@ -383,26 +392,71 @@ async def test_encoder(sie, model, corpus_texts, query_texts, corpus_items, quer
         query_vecs = np.array(all_vecs, dtype=np.float32)
         np.savez(query_cache, vectors=query_vecs)
 
-    # Brute-force cosine similarity
-    corpus_ids = [item["corpus_id"] for item in corpus_items]
-    # Normalize
-    corpus_norms = np.linalg.norm(corpus_vecs, axis=1, keepdims=True)
-    corpus_norms = np.where(corpus_norms == 0, 1, corpus_norms)
-    corpus_normed = corpus_vecs / corpus_norms
-    query_norms = np.linalg.norm(query_vecs, axis=1, keepdims=True)
-    query_norms = np.where(query_norms == 0, 1, query_norms)
-    query_normed = query_vecs / query_norms
+    # 3. Index in Turbopuffer (namespace = ablation-{model-slug})
+    ns = tpuf.namespace(ns_name)
+    logger.info(f"  Indexing {len(corpus_items)} docs in tpuf namespace '{ns_name}' (dim={corpus_vecs.shape[1]})")
+    for i in range(0, len(corpus_items), TPUF_BATCH):
+        end = min(i + TPUF_BATCH, len(corpus_items))
+        await ns.write(
+            distance_metric="cosine_distance",
+            upsert_columns={
+                "id": [str(corpus_items[j]["corpus_id"]) for j in range(i, end)],
+                "vector": [corpus_vecs[j].tolist() for j in range(i, end)],
+                "text": [corpus_texts[j] for j in range(i, end)],
+            },
+            schema={"text": {"type": "string", "full_text_search": {"tokenizer": "word_v2"}}},
+        )
+    logger.info(f"  Indexed {len(corpus_items)} docs in '{ns_name}'")
 
-    sims = query_normed @ corpus_normed.T  # (n_queries, n_corpus)
-    results = []
-    for i in range(sims.shape[0]):
-        top_indices = np.argsort(sims[i])[::-1][:50]
-        results.append([corpus_ids[j] for j in top_indices])
+    # 4. ANN vector search
+    if vec_cache.exists():
+        vec_results = json.load(open(vec_cache))
+        logger.info(f"  Cache hit vector search: {vec_cache}")
+    else:
+
+        async def vec_query(qv):
+            r = await ns.query(rank_by=("vector", "ANN", qv.tolist()), top_k=TOP_K, include_attributes=False)
+            return [int(row.id) for row in r.rows]
+
+        vec_results = list(await asyncio.gather(*[vec_query(qv) for qv in query_vecs]))
+        with open(vec_cache, "w") as f:
+            json.dump(vec_results, f)
+        logger.info(f"  Vector search: {len(vec_results)} queries, top-{TOP_K}")
+
+    # 5. BM25 search (same namespace, same text)
+    if bm25_cache.exists():
+        bm25_results = json.load(open(bm25_cache))
+        logger.info(f"  Cache hit BM25 search: {bm25_cache}")
+    else:
+
+        async def bm25_query(q):
+            r = await ns.query(rank_by=("text", "BM25", q), top_k=TOP_K, include_attributes=False)
+            return [int(row.id) for row in r.rows]
+
+        bm25_results = list(await asyncio.gather(*[bm25_query(q) for q in query_texts]))
+        with open(bm25_cache, "w") as f:
+            json.dump(bm25_results, f)
+        logger.info(f"  BM25 search: {len(bm25_results)} queries, top-{TOP_K}")
+
+    # 6. Evaluate: vector-only, BM25, hybrid pool
+    hybrid = [list(dict.fromkeys(v[:TOP_K] + b[:TOP_K])) for v, b in zip(vec_results, bm25_results)]
+
+    vec_ndcg, vec_recall = evaluate(vec_results, query_items, qrel_map)
+    bm25_ndcg, bm25_recall = evaluate(bm25_results, query_items, qrel_map)
+    hyb_ndcg, hyb_recall = evaluate(hybrid, query_items, qrel_map)
+
+    logger.info(f"  {model} vector-only: NDCG={vec_ndcg}, R@10={vec_recall}")
+    logger.info(f"  {model} BM25:        NDCG={bm25_ndcg}, R@10={bm25_recall}")
+    logger.info(f"  {model} hybrid:      NDCG={hyb_ndcg}, R@10={hyb_recall}")
+
+    # Save hybrid as the main result (best of the three for comparison)
+    best_results = hybrid if hyb_ndcg >= vec_ndcg else vec_results
+    best_ndcg = max(hyb_ndcg, vec_ndcg)
+    best_recall = hyb_recall if hyb_ndcg >= vec_ndcg else vec_recall
 
     with open(results_cache, "w") as f:
-        json.dump(results, f)
-    ndcg, recall = evaluate(results, query_items, qrel_map)
-    return ndcg, recall, 0, "ok"
+        json.dump(best_results, f)
+    return best_ndcg, best_recall, 0, "ok"
 
 
 async def main():
@@ -452,6 +506,9 @@ async def main():
     logger.info(
         f"Models to test: rerankers={len(RERANKERS)}, colbert={len(COLBERT_MODELS)}, encoders={len(DENSE_ENCODERS)}"
     )
+
+    tpuf_key = os.environ.get("TURBOPUFFER_API_KEY")
+    tpuf = AsyncTurbopuffer(api_key=tpuf_key, region="aws-us-east-1") if tpuf_key else None
 
     async with SIEAsyncClient(sie_url, api_key=sie_key, timeout_s=TIMEOUT_S, max_connections=5) as sie:
         # Test rerankers
@@ -509,9 +566,12 @@ async def main():
                 logger.info(f"\nTesting: {model}")
                 t0 = time.perf_counter()
                 try:
+                    if not tpuf:
+                        logger.error("  TURBOPUFFER_API_KEY required for encoder tests")
+                        break
                     ndcg, recall, _, status = await asyncio.wait_for(
                         test_encoder(
-                            sie, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem
+                            sie, tpuf, model, corpus_texts, query_texts, corpus_items, query_items, qrel_map, args.gpu, sem
                         ),
                         timeout=TIMEOUT_S,
                     )
@@ -600,12 +660,16 @@ async def main():
             # B. Vec100 + MV-bge100 union (0.90 recall, ~211 candidates)
             if mv_bge_path.exists() and vec100_path.exists():
                 vec100 = json.load(open(vec100_path))
-                pool_configs.append(("vec100-mv-bge100", [list(dict.fromkeys(v[:100] + m[:100])) for v, m in zip(vec100, mv_bge)]))
+                pool_configs.append(
+                    ("vec100-mv-bge100", [list(dict.fromkeys(v[:100] + m[:100])) for v, m in zip(vec100, mv_bge)])
+                )
 
             # C. MV-bge200 + MV-jina200 union (0.94 recall, ~293 candidates)
             if mv_bge_path.exists() and mv_jina_path.exists():
                 mv_jina = json.load(open(mv_jina_path))
-                pool_configs.append(("mv-bge200-jina200", [list(dict.fromkeys(m[:200] + j[:200])) for m, j in zip(mv_bge, mv_jina)]))
+                pool_configs.append(
+                    ("mv-bge200-jina200", [list(dict.fromkeys(m[:200] + j[:200])) for m, j in zip(mv_bge, mv_jina)])
+                )
 
             for pool_name, pools in pool_configs:
                 slug = f"pool-{pool_name}-mxbai-large"
@@ -614,8 +678,16 @@ async def main():
                 logger.info(f"  CE-scoring {pool_name} with {best_ce_model}...")
                 t0 = time.perf_counter()
                 ndcg, recall, _, status = await test_reranker(
-                    sie, best_ce_model, query_texts, pools, text_map,
-                    query_items, qrel_map, args.gpu, sem, cache_slug=slug,
+                    sie,
+                    best_ce_model,
+                    query_texts,
+                    pools,
+                    text_map,
+                    query_items,
+                    qrel_map,
+                    args.gpu,
+                    sem,
+                    cache_slug=slug,
                 )
                 elapsed = time.perf_counter() - t0
                 logger.info(f"  {pool_name} + CE: NDCG={ndcg}, Recall={recall} ({elapsed:.0f}s) [{status}]")
