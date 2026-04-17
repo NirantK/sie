@@ -133,11 +133,10 @@ Wider candidate pools improve CE reranking by increasing pool recall.
 
 | Pool Strategy | Candidates | Pool Recall | NDCG@10 | R@10 |
 |---------------|-----------|-------------|---------|------|
-| **MV-bge top-200** | ~200 | 0.89 | **0.6134** | **0.6560** |
+| **MV-bge100 + MV-jina100** | ~151 | 0.92 | **0.6208** | **0.6650** |
+| MV-bge top-200 | ~200 | 0.89 | 0.6134 | 0.6560 |
 | Vec100 + MV-bge100 | ~130 | 0.90 | 0.6086 | 0.6490 |
 | Hybrid BM25+Vec (baseline) | ~89 | 0.77 | 0.6004 | 0.6401 |
-
-*MV-bge200+jina200 pool (~293 candidates, 0.94 recall) pending — session timeout at 1800/1854. Re-run with `uv run python autoresearch.py --gpu l4-spot --type pool`.*
 
 *Additional rerankers tested: bge-reranker-large (0.4463), bge-reranker-base (0.3487), MiniLM-L-12 (0.2389). jina-reranker-v3 not available on SIE. Results in `autoresearch_results.tsv`.*
 
@@ -145,9 +144,9 @@ Wider candidate pools improve CE reranking by increasing pool recall.
 
 ## Key Findings
 
-1. **Cross-encoder reranking wins**: mxbai-large (0.6134 with MV pool) >> mxbai-base (0.5241) — +55% over dense vector
-2. **Pool recall is the bottleneck**: CE scores 0.69 within-pool. MV-bge200 pool (0.89 recall) → 0.6134 vs hybrid-50 (0.77 recall) → 0.6004
-3. **MV retrieval > BM25+Vector as first stage**: MV-based pools have higher recall than hybrid BM25+Vector
+1. **Cross-encoder reranking wins**: mxbai-large (0.6208 with dual-MV pool) >> mxbai-base (0.5241) — +57% over dense vector
+2. **Pool recall is the bottleneck**: CE scores 0.69 within-pool. Dual-MV pool (0.92 recall) → 0.6208 vs hybrid-50 (0.77 recall) → 0.6004
+3. **Two MV models > one**: bge-m3 + jina-colbert-v2 pool (0.6208) beats single bge-m3 pool (0.6134) — model diversity improves recall
 4. **Model size matters for CE**: large reranker (+14.5% over base) is the single biggest quality lever
 5. **Model generation matters**: bge-reranker-v2-m3 (0.5214) >> bge-reranker-large v1 (0.4463) — newer v2 beats larger v1
 6. **jina-colbert-v2 = best cost/quality tradeoff**: 96% of bge-m3 MV quality at 12.5% storage (128d vs 1024d)
