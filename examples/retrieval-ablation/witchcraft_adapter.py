@@ -82,11 +82,11 @@ def export_queries_tsv(query_items, output_path):
     logger.info(f"Exported {len(query_items)} queries to {output_path}")
 
 
-def run_cmd(args, label, env=None):
+def run_cmd(args, label, env=None, cwd=None):
     """Run a subprocess and return (stdout, stderr, elapsed_s)."""
     logger.info(f"  [{label}] {' '.join(str(a) for a in args)}")
     t0 = time.perf_counter()
-    result = subprocess.run(args, capture_output=True, text=True, env=env)
+    result = subprocess.run(args, capture_output=True, text=True, env=env, cwd=cwd)
     elapsed = time.perf_counter() - t0
     if result.returncode != 0:
         logger.error(f"  [{label}] FAILED (exit {result.returncode})")
@@ -98,24 +98,29 @@ def run_cmd(args, label, env=None):
 
 def run_witchcraft_pipeline(warp_cli, assets, db_path, corpus_tsv, queries_tsv, results_path, use_hybrid=False):
     """Orchestrate: readcsv → embed → index → querycsv/hybridcsv"""
-    env = {**os.environ, "WITCHCRAFT_DB": str(db_path), "WITCHCRAFT_ASSETS": str(assets)}
+    # warp-cli uses hardcoded relative "assets" dir and "mydb.sqlite", so run from witchcraft repo root
+    warp_dir = Path(assets).parent
+    env = os.environ.copy()
     timings = {}
 
     # Step 1: Import corpus
-    _, _, t = run_cmd([warp_cli, "readcsv", str(corpus_tsv)], "readcsv", env)
+    _, _, t = run_cmd([warp_cli, "readcsv", str(Path(corpus_tsv).resolve())], "readcsv", env, cwd=str(warp_dir))
     timings["readcsv"] = t
 
     # Step 2: Embed with T5
-    _, _, t = run_cmd([warp_cli, "embed"], "embed", env)
+    _, _, t = run_cmd([warp_cli, "embed"], "embed", env, cwd=str(warp_dir))
     timings["embed"] = t
 
     # Step 3: Build WARP index
-    _, _, t = run_cmd([warp_cli, "index"], "index", env)
+    _, _, t = run_cmd([warp_cli, "index"], "index", env, cwd=str(warp_dir))
     timings["index"] = t
 
     # Step 4: Batch search
     cmd_name = "hybridcsv" if use_hybrid else "querycsv"
-    stdout, _, t = run_cmd([warp_cli, cmd_name, str(queries_tsv), str(results_path)], cmd_name, env)
+    stdout, _, t = run_cmd(
+        [warp_cli, cmd_name, str(Path(queries_tsv).resolve()), str(Path(results_path).resolve())],
+        cmd_name, env, cwd=str(warp_dir),
+    )
     timings[cmd_name] = t
 
     # Parse p95 latency from stdout
